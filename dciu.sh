@@ -21,7 +21,7 @@ echo_log() {
 
 # Notification helper: call notify module if exists
 notify_event() {
-  event="$1" # e.g. update_available, updated, update_failed
+  event="$1" # e.g. update_available, updated, update_failed, update_skipped
   container="$2"
   image="$3"
   old_digest="$4"
@@ -63,7 +63,19 @@ check_update() {
   img="$1"
   old="$(get_local_digest "$img")"
   new="$(get_remote_digest "$img")"
-  if [ -z "$old" ] || [ -z "$new" ] || [ "$old" != "$new" ]; then
+
+  if [ -z "$old" ]; then
+    echo_log "Error: local image not found: $img"
+    return 1
+  fi
+
+  if [ -z "$new" ]; then
+    echo_log "Error: remote image not found: $img"
+    return 1
+  fi
+
+  # Check if digests are different
+  if [ "$old" != "$new" ]; then
     echo "$old $new"
     return 0
   fi
@@ -87,19 +99,19 @@ process_container() {
   st_lbl="$(docker inspect --format "{{index .Config.Labels \"$LABEL_START_STOPPED\"}}" "$cid")"
   start_stopped=${st_lbl:-$START_STOPPED}
 
-  # Check container running state
-  running="$(docker inspect --format '{{.State.Running}}' "$cid")"
-  if [ "$running" != "true" ]; then
-    # Stopped container
-    if [ "$update_stopped" != "true" ]; then
-      echo_log "Skipping stopped container $name ($img): update_stopped=false"
-      return
-    fi
-  fi
-
   # Skip if none mode
   if [ "$mode" = "none" ]; then
     echo_log "Skipping container $name ($img) due to selected mode: $mode"
+    return
+  fi
+
+  # Check container running state
+  running="$(docker inspect --format '{{.State.Running}}' "$cid")"
+  if [ "$running" != "true" ] && [ "$update_stopped" != "true" ]; then
+    # Stopped container
+    msg="Skipping stopped container $name ($img): update_stopped=false"
+    echo_log "$msg"
+    notify_event update_skipped "$name" "$img" "" "" "$mode" "$running" "$msg"
     return
   fi
 

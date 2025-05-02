@@ -3,7 +3,8 @@
 # dciu.sh - Docker Container Image Updater (dciu)
 
 # Load configuration
-CONFIG_FILE="$(dirname "$(realpath "$0")")/dciu.conf"
+SCRIPT_DIR="$(dirname "$(realpath "$0")")"
+CONFIG_FILE="$SCRIPT_DIR/dciu.conf"
 if [ ! -f "$CONFIG_FILE" ]; then
   echo "Config file not found: $CONFIG_FILE" >&2
   exit 1
@@ -26,11 +27,21 @@ notify_event() {
   old_digest="$4"
   new_digest="$5"
   mode="$6"
-  mod_script="$(dirname "$0")/notify/${NOTIFY_MODULE}.sh"
+  running="$7"
+  message="$8"
+
+  mod_script="$SCRIPT_DIR/notify/${NOTIFY_MODULE}.sh"
+
   if [ -x "$mod_script" ]; then
-    "$mod_script" "$event" "$container" "$image" "$old_digest" "$new_digest" "$mode"
+    if ! "$mod_script" "$event" "$container" "$image" "$old_digest" "$new_digest" "$mode" "$running" "$message"; then
+      echo_log "Error: notify module failed: $mod_script"
+    else
+      echo_log "Notification sent for event: $event"
+    fi
+  elif [ -f "$mod_script" ]; then
+    echo_log "Error: notify module not executable: $mod_script"
   else
-    echo_log "Warning: notify module not found or not executable: $mod_script"
+    echo_log "Error: notify module not found: $mod_script"
   fi
 }
 
@@ -67,15 +78,28 @@ process_container() {
 
   # Determine mode: container label overrides default
   mode_label="$(docker inspect --format "{{index .Config.Labels \"$LABEL_MODE\"}}" "$cid")"
-  if [ -z "$mode_label" ]; then
-    mode="$MODE"
-  else
-    mode="$mode_label"
+  mode=${mode_label:-$MODE}
+
+  # Determine update_stopped flag
+  upd_lbl="$(docker inspect --format "{{index .Config.Labels \"$LABEL_UPDATE_STOPPED\"}}" "$cid")"
+  update_stopped=${upd_lbl:-$UPDATE_STOPPED}
+  # Determine start_stopped flag
+  st_lbl="$(docker inspect --format "{{index .Config.Labels \"$LABEL_START_STOPPED\"}}" "$cid")"
+  start_stopped=${st_lbl:-$START_STOPPED}
+
+  # Check container running state
+  running="$(docker inspect --format '{{.State.Running}}' "$cid")"
+  if [ "$running" != "true" ]; then
+    # Stopped container
+    if [ "$update_stopped" != "true" ]; then
+      echo_log "Skipping stopped container $name ($img): update_stopped=false"
+      return
+    fi
   fi
 
-  # Skip if none
+  # Skip if none mode
   if [ "$mode" = "none" ]; then
-    echo_log "Skipping $name ($img) due to mode none"
+    echo_log "Skipping container $name ($img) due to selected mode: $mode"
     return
   fi
 
@@ -84,27 +108,52 @@ process_container() {
     old_digest="$(echo "$dig" | awk '{print $1}')"
     new_digest="$(echo "$dig" | awk '{print $2}')"
 
-    echo_log "$mode: update available for $name ($img): $old_digest -> $new_digest"
-    notify_event update_available "$name" "$img" "$old_digest" "$new_digest" "$mode"
+    msg="$mode: update available for $name ($img): $old_digest -> $new_digest"
+    echo_log "$msg"
+    notify_event update_available "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
 
     if [ "$mode" = "autoupdate" ]; then
       # Pull new image
       if docker pull "$img"; then
         docker stop "$cid"
         docker rm "$cid"
-        # Rerun container via user script
-        cmd_script="$(dirname "$0")/cmds/${name}.sh"
+        # Recreate container via user script
+        cmd_script="$SCRIPT_DIR/cmds/${name}.sh"
         if [ -x "$cmd_script" ]; then
-          "$cmd_script"
-          echo_log "Container $name restarted"
-          notify_event updated "$name" "$img" "$old_digest" "$new_digest"
+          if ! "$cmd_script"; then
+            msg="Error: cmd script failed: $cmd_script"
+            echo_log "$msg"
+            notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+            return
+          fi
+
+          msg="Container $name recreated successfully"
+          echo_log "$msg"
+
+          # Start container if it was running before or if start_stopped=true
+          if [ "$start_stopped" = "true" ] || [ "$running" = "true" ]; then
+            if ! docker start "$name"; then
+              msg="Error: failed to start container $name"
+              echo_log "$msg"
+              notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+              return
+            fi
+            msg="Container $name ($img) (re)started successfully"
+            echo_log "$msg"
+          else
+            msg="Container $name ($img) not started due to start_stopped=false"
+            echo_log "$msg"
+          fi
+          notify_event updated "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
         else
-          echo_log "Error: cmd script not found or not executable: $cmd_script"
-          notify_event update_failed "$name" "$img" "$old_digest" "$new_digest"
+          msg="Error: cmd script not found or not executable: $cmd_script"
+          echo_log "$msg"
+          notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
         fi
       else
-        echo_log "Error pulling image $img"
-        notify_event update_failed "$name" "$img" "$old_digest" "$new_digest"
+        msg="Error pulling image $img for container $name"
+        echo_log "$msg"
+        notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
       fi
     fi
   else
@@ -114,8 +163,8 @@ process_container() {
 
 # Iterate containers by label and mode
 main() {
-  # Get all running containers
-  cids="$(docker ps -q)"
+  # Get all containers
+  cids="$(docker ps -q -a)"
   for cid in $cids; do
     process_container "$cid"
   done

@@ -19,7 +19,7 @@ echo_log() {
   echo "[$ts] $msg" | tee -a "$LOG_FILE"
 }
 
-# Notification helper: call notify module if exists
+# Notification helper: call notify modules if exists and event matches filter
 notify_event() {
   event="$1" # e.g. update_available, updated, update_failed, update_skipped
   container="$2"
@@ -30,19 +30,50 @@ notify_event() {
   running="$7"
   message="$8"
 
-  mod_script="$SCRIPT_DIR/notify/${NOTIFY_MODULE}.sh"
-
-  if [ -x "$mod_script" ]; then
-    if ! "$mod_script" "$event" "$container" "$image" "$old_digest" "$new_digest" "$mode" "$running" "$message"; then
-      echo_log "Error: notify module failed: $mod_script"
-    else
-      echo_log "Notification sent for event: $event"
-    fi
-  elif [ -f "$mod_script" ]; then
-    echo_log "Error: notify module not executable: $mod_script"
-  else
-    echo_log "Error: notify module not found: $mod_script"
+  if [ -z "$NOTIFY_MODULE" ]; then
+    echo_log "No notify module configured, skipping notification for event: $event"
+    return
   fi
+  if [ -z "$NOTIFY_EVENT" ]; then
+    echo_log "No notify event configured, skipping notification for event: $event"
+    return
+  fi
+
+  notify_events=$(printf "%s" "$NOTIFY_EVENT" | tr ',' ' ')
+
+  # Skip notification if event not in notify_events and notify_events doesn't include "all"
+  # If NOTIFY_EVENT includes "none", disable all notifications
+  case " $notify_events " in
+    *" none "*)
+      echo_log "Skipping notification for event: $event due to filter NOTIFY_EVENT=\"none\""
+      return
+      ;;
+    *" all "*) ;; # notify all events
+    *)
+      case " $notify_events " in
+        *" $event "*) ;; # allowed event
+        *)
+          echo_log "Skipping notification for event: $event due to filter NOTIFY_EVENT=\"$NOTIFY_EVENT\""
+          return
+          ;;
+      esac
+      ;;
+  esac
+
+  for mod in $(echo "$NOTIFY_MODULE" | tr ',' " "); do
+    mod_script="$SCRIPT_DIR/notify/${mod}.sh"
+    if [ -x "$mod_script" ]; then
+      if ! "$mod_script" "$event" "$container" "$image" "$old_digest" "$new_digest" "$mode" "$running" "$message"; then
+        echo_log "[Error] notify module failed: $mod_script"
+      else
+        echo_log "Notification sent for event $event via module: $mod"
+      fi
+    elif [ -f "$mod_script" ]; then
+      echo_log "[Error] notify module not executable: $mod_script"
+    else
+      echo_log "[Error] notify module not found: $mod_script"
+    fi
+  done
 }
 
 # Get local image digest (first RepoDigest)

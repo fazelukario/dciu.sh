@@ -105,20 +105,36 @@ process_container() {
     return
   fi
 
-  # Check container running state
-  running="$(docker inspect --format '{{.State.Running}}' "$cid")"
-  if [ "$running" != "true" ] && [ "$update_stopped" != "true" ]; then
-    # Stopped container
-    msg="Skipping stopped container $name ($img): update_stopped=false"
-    echo_log "$msg"
-    notify_event update_skipped "$name" "$img" "" "" "$mode" "$running" "$msg"
-    return
-  fi
-
   # Check for update
   if dig="$(check_update "$img")"; then
     old_digest="$(echo "$dig" | awk '{print $1}')"
     new_digest="$(echo "$dig" | awk '{print $2}')"
+
+    # Check container running state
+    running="$(docker inspect --format '{{.State.Running}}' "$cid")"
+    if [ "$running" != "true" ] && [ "$update_stopped" != "true" ]; then
+      # Stopped container
+      msg="Skipping stopped container $name ($img): update_stopped=false"
+      echo_log "$msg"
+      notify_event update_skipped "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+      return
+    fi
+
+    # Skip containers part of Docker Compose or Swarm stack
+    compose_project="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$cid")"
+    if [ -n "$compose_project" ]; then
+      msg="Skipping container $name ($img): part of Docker Compose project ($compose_project) [Docker Compose currently not supported, but will be in future]"
+      echo_log "$msg"
+      notify_event update_skipped "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+      return
+    fi
+    stack_ns="$(docker inspect --format '{{index .Config.Labels "com.docker.stack.namespace"}}' "$cid")"
+    if [ -n "$stack_ns" ]; then
+      msg="Skipping container $name ($img): part of Docker Swarm stack ($stack_ns) [Docker Swarm currently not supported due to lack of resources for testing, if you want to help, feel free to open an issue or PR]"
+      echo_log "$msg"
+      notify_event update_skipped "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+      return
+    fi
 
     msg="$mode: update available for $name ($img): $old_digest -> $new_digest"
     echo_log "$msg"

@@ -2,7 +2,7 @@
 
 # dciu.sh - Docker Container Image Updater (dciu)
 
-export DCIU_VER=1.2.0
+export DCIU_VER=1.2.1
 
 export DCIU_PROJECT_NAME="dciu.sh"
 
@@ -17,6 +17,13 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 # shellcheck source=dciu.conf
 . "$CONFIG_FILE"
+
+if [ -z "$NOTIFY_SOURCE" ]; then
+  DCIU_NOTIFY_SOURCE="$(hostname -f)"
+  export DCIU_NOTIFY_SOURCE
+else
+  export DCIU_NOTIFY_SOURCE="$NOTIFY_SOURCE"
+fi
 
 # Logging helper
 echo_log() {

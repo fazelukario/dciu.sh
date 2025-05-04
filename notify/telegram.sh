@@ -18,6 +18,10 @@ mode="$6"
 running="$7"
 message="$8"
 
+if [ -n "$DCIU_TELEGRAM_BOT_APITOKEN" ]; then TELEGRAM_BOT_APITOKEN="$DCIU_TELEGRAM_BOT_APITOKEN"; fi
+if [ -n "$DCIU_TELEGRAM_BOT_CHATID" ]; then TELEGRAM_BOT_CHATID="$DCIU_TELEGRAM_BOT_CHATID"; fi
+if [ -n "$DCIU_TELEGRAM_BOT_URLBASE" ]; then TELEGRAM_BOT_URLBASE="$DCIU_TELEGRAM_BOT_URLBASE"; fi
+
 # check required variables
 if [ -z "$TELEGRAM_BOT_APITOKEN" ]; then
   echo "[Error] TELEGRAM_BOT_APITOKEN is not set" >&2
@@ -37,10 +41,10 @@ fi
 escape_markdown() { printf "%s" "$1" | sed 's/\\/\\\\/g' | sed 's/\]/\\\]/g' | sed 's/\([_*[()~`>#+--=|{}.!]\)/\\\1/g'; }
 
 # function to escape JSON strings
-escape_json() { printf '%s' "$1" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;s/\n/\\n/g;ta'; }
+escape_json() { printf "%s" "$1" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;s/\n/\\n/g;ta'; }
 
 # escape dynamic values
-evt=$(escape_markdown "dciu.sh: $event")
+evt=$(escape_markdown "$event")
 cn=$(escape_markdown "$container")
 img=$(escape_markdown "$image")
 od=$(escape_markdown "$old_digest")
@@ -48,11 +52,12 @@ nd=$(escape_markdown "$new_digest")
 rn=$(escape_markdown "$running")
 md=$(escape_markdown "$mode")
 msg=$(escape_markdown "$message")
+src=$(escape_markdown "$DCIU_NOTIFY_SOURCE")
 
 # build message text with here-doc for POSIX compliance
 text=$(
   cat << EOF
-*${evt}*
+*dciu\\.sh: ${evt}*
 *📦 Container:* ${cn}
 *💿 Image:* ${img}
 *Old Digest:* \`${od}\`
@@ -62,6 +67,7 @@ text=$(
 *⚙ Mode:* ${md}
 *📋 Message:*
 >${msg}
+_Source:_ \`${src}\`
 EOF
 )
 

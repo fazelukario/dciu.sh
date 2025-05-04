@@ -18,6 +18,10 @@ mode="$6"
 running="$7"
 message="$8"
 
+if [ -n "$DCIU_DISCORD_WEBHOOK_URL" ]; then DISCORD_WEBHOOK_URL="$DCIU_DISCORD_WEBHOOK_URL"; fi
+if [ -n "$DCIU_DISCORD_USERNAME" ]; then DISCORD_USERNAME="$DCIU_DISCORD_USERNAME"; fi
+if [ -n "$DCIU_DISCORD_AVATAR_URL" ]; then DISCORD_AVATAR_URL="$DCIU_DISCORD_AVATAR_URL"; fi
+
 # Ensure webhook URL is set
 if [ -z "$DISCORD_WEBHOOK_URL" ]; then
   echo "[Error] DISCORD_WEBHOOK_URL is not set" >&2
@@ -37,10 +41,10 @@ esac
 timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # Function to escape JSON strings
-escape_json() { printf '%s' "$1" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;s/\n/\\n/g;ta'; }
+escape_json() { printf "%s" "$1" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;s/\n/\\n/g;ta'; }
 
 # Escape dynamic values
-evt=$(escape_json "dciu.sh: $event")
+evt=$(escape_json "$event")
 cn=$(escape_json "$container")
 img=$(escape_json "$image")
 od=$(escape_json "$old_digest")
@@ -49,6 +53,7 @@ rn=$(escape_json "$running")
 md=$(escape_json "$mode")
 msg=$(escape_json "$message")
 ts=$(escape_json "$timestamp")
+src=$(escape_json "$DCIU_NOTIFY_SOURCE")
 
 # Build optional fields
 username_field=""
@@ -72,7 +77,7 @@ payload=$(
       "components": [
         {
           "type": 10,
-          "content": "# $evt"
+          "content": "# dciu.sh: $evt"
         },
         {
           "type": 10,
@@ -139,7 +144,7 @@ payload=$(
         },
         {
           "type": 10,
-          "content": "-# $ts"
+          "content": "-# $ts | Source: $src"
         }
       ]
     }

@@ -144,7 +144,7 @@ payload=$(
         },
         {
           "type": 10,
-          "content": "-# $ts | Source: $src"
+          "content": "-# :alarm_clock: $ts | :desktop: Source: $src"
         }
       ]
     }

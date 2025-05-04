@@ -67,7 +67,7 @@ text=$(
 *⚙ Mode:* ${md}
 *📋 Message:*
 >${msg}
-_Source:_ \`${src}\`
+_🖥 Source:_ \`${src}\`
 EOF
 )
 

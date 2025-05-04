@@ -2,7 +2,7 @@
 
 # dciu.sh - Docker Container Image Updater (dciu)
 
-export DCIU_VER=1.3.2
+export DCIU_VER=1.4.0
 
 export DCIU_PROJECT_NAME="dciu.sh"
 
@@ -23,6 +23,10 @@ if [ -z "$NOTIFY_SOURCE" ]; then
   export DCIU_NOTIFY_SOURCE
 else
   export DCIU_NOTIFY_SOURCE="$NOTIFY_SOURCE"
+fi
+
+if ! chmod "+x" "$SCRIPT_DIR/notify/"*.sh; then
+  echo_log "[Error] Failed to make notify scripts executable."
 fi
 
 # Logging helper

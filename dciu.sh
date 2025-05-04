@@ -2,6 +2,12 @@
 
 # dciu.sh - Docker Container Image Updater (dciu)
 
+export DCIU_VER=1.2.0
+
+export DCIU_PROJECT_NAME="dciu.sh"
+
+export DCIU_PROJECT="https://github.com/fazelukario/$DCIU_PROJECT_NAME"
+
 # Load configuration
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 CONFIG_FILE="$SCRIPT_DIR/dciu.conf"

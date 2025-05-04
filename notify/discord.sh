@@ -20,17 +20,17 @@ message="$8"
 
 # Ensure webhook URL is set
 if [ -z "$DISCORD_WEBHOOK_URL" ]; then
-    echo "[Error] DISCORD_WEBHOOK_URL is not set" >&2
-    exit 1
+  echo "[Error] DISCORD_WEBHOOK_URL is not set" >&2
+  exit 1
 fi
 
 # Compute accent color based on event type
 case "$event" in
-    update_available) color=16776960 ;; # yellow
-    updated) color=65280 ;;             # green
-    update_failed) color=16711680 ;;    # red
-    update_skipped) color=8421504 ;;    # grey
-    *) color=0 ;;                       # default
+  update_available) color=16776960 ;; # yellow
+  updated) color=65280 ;;             # green
+  update_failed) color=16711680 ;;    # red
+  update_skipped) color=8421504 ;;    # grey
+  *) color=0 ;;                       # default
 esac
 
 # ISO8601 UTC timestamp
@@ -54,15 +54,15 @@ ts=$(escape_json "$timestamp")
 username_field=""
 avatar_field=""
 if [ -n "$DISCORD_USERNAME" ]; then
-    username_field=",\"username\":\"$(escape_json "$DISCORD_USERNAME")\""
+  username_field=",\"username\":\"$(escape_json "$DISCORD_USERNAME")\""
 fi
 if [ -n "$DISCORD_AVATAR_URL" ]; then
-    avatar_field=",\"avatar_url\":\"$(escape_json "$DISCORD_AVATAR_URL")\""
+  avatar_field=",\"avatar_url\":\"$(escape_json "$DISCORD_AVATAR_URL")\""
 fi
 
 # Build payload with Container and Components V2
 payload=$(
-    cat << EOF
+  cat << EOF
 {
   "flags": 32768${username_field}${avatar_field},
   "components": [
@@ -76,11 +76,11 @@ payload=$(
         },
         {
           "type": 10,
-          "content": "## Container: $cn"
+          "content": "## :package: Container: $cn"
         },
         {
           "type": 10,
-          "content": "### Image: $img"
+          "content": "### :cd: Image: $img"
         },
         {
           "type": 14,
@@ -106,11 +106,11 @@ payload=$(
         },
         {
           "type": 10,
-          "content": "Running: $rn"
+          "content": ":man_running_facing_right: Running: $rn"
         },
         {
           "type": 10,
-          "content": "Mode: $md"
+          "content": ":gear: Mode: $md"
         },
         {
           "type": 14,
@@ -119,7 +119,7 @@ payload=$(
         },
         {
           "type": 10,
-          "content": "### Message:\n$msg"
+          "content": "### :clipboard: Message:\n$msg"
         },
         {
           "type": 14,
@@ -132,7 +132,7 @@ payload=$(
             {
               "type": 2,
               "style": 5,
-              "label": "View on Docker Hub",
+              "label": "View on Docker Hub 🐳",
               "url": "https://hub.docker.com/r/${img%%:*}"
             }
           ]
@@ -152,14 +152,14 @@ EOF
 webhook_url="$DISCORD_WEBHOOK_URL?wait=true&with_components=true"
 
 status_code=$(
-    curl -s -o /dev/null -w "%{http_code}" -X POST "$webhook_url" \
-        -H "Content-Type: application/json" \
-        --data "$payload"
+  curl -s -o /dev/null -w "%{http_code}" -X POST "$webhook_url" \
+    -H "Content-Type: application/json" \
+    --data "$payload"
 )
 
 if [ "$status_code" -lt 200 ] || [ "$status_code" -ge 300 ]; then
-    echo "[Error] Failed to send Discord notification, HTTP status: $status_code" >&2
-    exit 1
+  echo "[Error] Failed to send Discord notification, HTTP status: $status_code" >&2
+  exit 1
 fi
 
 exit 0

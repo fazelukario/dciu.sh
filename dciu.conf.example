@@ -26,7 +26,7 @@ NOTIFY_EVENT="update_available,updated,update_failed"
 # REGISTRY_PASSWORD=""
 
 # Log file path
-LOG_FILE="$PWD/dciu.log"
+LOG_FILE="$SCRIPT_DIR/dciu.log"
 
 #DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/some-numbers/some-letters" # Update with actual webhook URL
 #DISCORD_AVATAR_URL="https://example.com/avatar.png"  # Update with actual avatar URL

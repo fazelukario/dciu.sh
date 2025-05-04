@@ -2,7 +2,7 @@
 
 # dciu.sh - Docker Container Image Updater (dciu)
 
-export DCIU_VER=1.2.1
+export DCIU_VER=1.3.2
 
 export DCIU_PROJECT_NAME="dciu.sh"
 

@@ -2,3 +2,5 @@ dciu.conf
 
 cmds/*
 !cmds/.gitkeep
+
+*.log

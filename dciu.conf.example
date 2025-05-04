@@ -31,3 +31,6 @@ LOG_FILE="$PWD/dciu.log"
 #DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/some-numbers/some-letters" # Update with actual webhook URL
 #DISCORD_AVATAR_URL="https://example.com/avatar.png"  # Update with actual avatar URL
 #DISCORD_USERNAME="dciu.sh"
+
+#TELEGRAM_BOT_APITOKEN="123456789:ABCxyz" # Update with actual bot token
+#TELEGRAM_BOT_CHATID="123456789" # Update with actual chat ID

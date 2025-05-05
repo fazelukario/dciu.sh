@@ -15,6 +15,7 @@
 # - Refactor code to use functions
 # - Refactor and standardize logging and log messages across script and all notify modules
 # - Add support for recreating containers (created in portainer?) with Portainer webhooks and/or API
+# - Add support for updateting images after certain time passed after image release (e.g. 1 day, 1 week, etc.)
 # - (Probably in very far future) Add support for Docker Swarm and Kubernetes (k8s) (currently only Docker Compose is supported)
 
 export DCIU_VER=1.6.4

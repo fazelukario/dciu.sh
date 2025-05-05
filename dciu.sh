@@ -172,13 +172,14 @@ process_container() {
     old_digest="$(echo "$dig" | awk '{print $1}')"
     new_digest="$(echo "$dig" | awk '{print $2}')"
 
+    running="$(docker inspect --format '{{.State.Running}}' "$cid")"
+
     msg="$mode: update available for $name ($img): $old_digest -> $new_digest"
     echo_log "$msg"
     notify_event update_available "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
 
     if [ "$mode" = "autoupdate" ]; then
       # Check container running state
-      running="$(docker inspect --format '{{.State.Running}}' "$cid")"
       if [ "$running" != "true" ] && [ "$update_stopped" != "true" ]; then
         # Stopped container
         msg="Skipping stopped container $name ($img): update_stopped=$update_stopped"

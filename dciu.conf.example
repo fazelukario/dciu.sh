@@ -10,6 +10,9 @@ START_STOPPED='false'
 # Remove dangling images after updates
 PRUNE_DANGLING='false'
 
+# Update containers in docker compose stacks
+UPDATE_CONTAINERS_IN_COMPOSE='false'
+
 # Labels for selecting containers
 LABEL_MODE='dciu.mode'
 # Labels to override stopped containers behavior

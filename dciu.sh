@@ -12,7 +12,7 @@
 # - Add support for recreating containers (created in portainer?) with Portainer webhooks and/or API
 # - (Probably in very far future) Add support for Docker Swarm and Kubernetes (k8s) (currently only Docker Compose is supported)
 
-export DCIU_VER=1.6.1
+export DCIU_VER=1.6.3
 
 export DCIU_PROJECT_NAME="dciu.sh"
 
@@ -181,7 +181,7 @@ process_container() {
       running="$(docker inspect --format '{{.State.Running}}' "$cid")"
       if [ "$running" != "true" ] && [ "$update_stopped" != "true" ]; then
         # Stopped container
-        msg="Skipping stopped container $name ($img): update_stopped=false"
+        msg="Skipping stopped container $name ($img): update_stopped=$update_stopped"
         echo_log "$msg"
         notify_event update_skipped "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
         return
@@ -192,6 +192,22 @@ process_container() {
       if [ -n "$compose_project" ]; then
         compose_service="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$cid")"
         compose_file="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$cid")"
+
+        if [ "$UPDATE_CONTAINERS_IN_COMPOSE" != "true" ]; then
+          msg="Skipping container $name ($img) [Service \"$compose_service\"] in Docker Compose project $compose_project ($compose_file): \
+          UPDATE_CONTAINERS_IN_COMPOSE=$UPDATE_CONTAINERS_IN_COMPOSE"
+          echo_log "$msg"
+          notify_event update_skipped "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+          return
+        fi
+
+        # Check if compose file exists
+        if [ -z "$compose_file" ]; then
+          msg="Error: Docker Compose file not found for container $name ($img)"
+          echo_log "$msg"
+          notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+          return
+        fi
 
         msg="Updating Docker Compose service $compose_service in project $compose_project ($compose_file)"
         echo_log "$msg"
@@ -257,7 +273,7 @@ process_container() {
           msg="Container $name ($compose_service) in Compose project $compose_project ($compose_file) (re)started successfully"
           echo_log "$msg"
         else
-          msg="Container $name ($compose_service) in Compose project $compose_project ($compose_file) not started due to start_stopped=false"
+          msg="Container $name ($compose_service) in Compose project $compose_project ($compose_file) not started due to start_stopped=$start_stopped"
           echo_log "$msg"
         fi
 
@@ -344,7 +360,7 @@ process_container() {
         msg="Container $name ($img) (re)started successfully"
         echo_log "$msg"
       else
-        msg="Container $name ($img) not started due to start_stopped=false"
+        msg="Container $name ($img) not started due to start_stopped=$start_stopped"
         echo_log "$msg"
       fi
 

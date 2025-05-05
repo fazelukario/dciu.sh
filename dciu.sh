@@ -178,8 +178,10 @@ process_container() {
       if [ -n "$compose_project" ]; then
         compose_service="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$cid")"
         compose_file="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$cid")"
+
         msg="Updating Docker Compose service $compose_service in project $compose_project ($compose_file)"
         echo_log "$msg"
+
         if command -v docker compose > /dev/null 2>&1; then
           comp_cmd="docker compose"
         elif command -v docker-compose > /dev/null 2>&1; then
@@ -190,6 +192,7 @@ process_container() {
           notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
           return
         fi
+
         if ! $comp_cmd -f "$compose_file" pull "$compose_service"; then
           msg="Error pulling image $img for container $name ($compose_service) in Compose project $compose_project ($compose_file)"
           echo_log "$msg"
@@ -213,6 +216,7 @@ process_container() {
           notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
           return
         fi
+
         msg="Container $name ($compose_service) in Compose project $compose_project ($compose_file) stopped and removed successfully"
         echo_log "$msg"
 
@@ -223,8 +227,10 @@ process_container() {
           notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
           return
         fi
+
         msg="Container $name ($compose_service) in Compose project $compose_project ($compose_file) recreated successfully"
         echo_log "$msg"
+
         # Start container if it was running before or if start_stopped=true
         if [ "$start_stopped" = "true" ] || [ "$running" = "true" ]; then
           if ! $comp_cmd -f "$compose_file" start; then
@@ -233,6 +239,7 @@ process_container() {
             notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
             return
           fi
+
           msg="Container $name ($compose_service) in Compose project $compose_project ($compose_file) (re)started successfully"
           echo_log "$msg"
         else
@@ -255,47 +262,68 @@ process_container() {
       fi
 
       # Pull new image
-      if docker pull "$img"; then
-        docker stop "$cid"
-        docker rm "$cid"
-        # Recreate container via user script
-        cmd_script="$SCRIPT_DIR/cmds/${name}.sh"
-        if [ -x "$cmd_script" ]; then
-          if ! "$cmd_script"; then
-            msg="Error: cmd script failed: $cmd_script"
-            echo_log "$msg"
-            notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
-            return
-          fi
-
-          msg="Container $name recreated successfully"
-          echo_log "$msg"
-
-          # Start container if it was running before or if start_stopped=true
-          if [ "$start_stopped" = "true" ] || [ "$running" = "true" ]; then
-            if ! docker start "$name"; then
-              msg="Error: failed to start container $name"
-              echo_log "$msg"
-              notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
-              return
-            fi
-            msg="Container $name ($img) (re)started successfully"
-            echo_log "$msg"
-          else
-            msg="Container $name ($img) not started due to start_stopped=false"
-            echo_log "$msg"
-          fi
-          notify_event updated "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
-        else
-          msg="Error: cmd script not found or not executable: $cmd_script"
-          echo_log "$msg"
-          notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
-        fi
-      else
+      if ! docker pull "$img"; then
         msg="Error pulling image $img for container $name"
         echo_log "$msg"
         notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
       fi
+
+      msg="Successfully pulled image $img for container $name"
+      echo_log "$msg"
+
+      # Stop and remove container
+      if ! docker stop "$cid"; then
+        msg="Error stopping container $name ($img)"
+        echo_log "$msg"
+        notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+        return
+      fi
+      if ! docker rm "$cid"; then
+        msg="Error removing container $name ($img)"
+        echo_log "$msg"
+        notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+        return
+      fi
+
+      msg="Container $name ($img) stopped and removed successfully"
+      echo_log "$msg"
+
+      # Recreate container via user script
+      cmd_script="$SCRIPT_DIR/cmds/${name}.sh"
+      if ! [ -x "$cmd_script" ]; then
+        msg="Error: cmd script not found or not executable: $cmd_script"
+        echo_log "$msg"
+        notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+        return
+      fi
+
+      if ! "$cmd_script"; then
+        msg="Error: cmd script failed: $cmd_script"
+        echo_log "$msg"
+        notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+        return
+      fi
+
+      msg="Container $name recreated successfully"
+      echo_log "$msg"
+
+      # Start container if it was running before or if start_stopped=true
+      if [ "$start_stopped" = "true" ] || [ "$running" = "true" ]; then
+        if ! docker start "$name"; then
+          msg="Error: failed to start container $name"
+          echo_log "$msg"
+          notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+          return
+        fi
+
+        msg="Container $name ($img) (re)started successfully"
+        echo_log "$msg"
+      else
+        msg="Container $name ($img) not started due to start_stopped=false"
+        echo_log "$msg"
+      fi
+
+      notify_event updated "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
     fi
   else
     echo_log "No update for $name ($img)"

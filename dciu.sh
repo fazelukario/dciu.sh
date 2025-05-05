@@ -2,7 +2,7 @@
 
 # dciu.sh - Docker Container Image Updater (dciu)
 
-export DCIU_VER=1.4.0
+export DCIU_VER=1.5.0
 
 export DCIU_PROJECT_NAME="dciu.sh"
 
@@ -173,14 +173,79 @@ process_container() {
         return
       fi
 
-      # Skip containers part of Docker Compose or Swarm stack
+      # Handle containers part of Docker Compose project
       compose_project="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$cid")"
       if [ -n "$compose_project" ]; then
-        msg="Skipping container $name ($img): part of Docker Compose project ($compose_project) [Docker Compose currently not supported, but will be in future]"
+        compose_service="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$cid")"
+        compose_file="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$cid")"
+        msg="Updating Docker Compose service $compose_service in project $compose_project ($compose_file)"
         echo_log "$msg"
-        notify_event update_skipped "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+        if command -v docker compose > /dev/null 2>&1; then
+          comp_cmd="docker compose"
+        elif command -v docker-compose > /dev/null 2>&1; then
+          comp_cmd="docker-compose"
+        else
+          msg="Error: docker compose and docker-compose not found"
+          echo_log "$msg"
+          notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+          return
+        fi
+        if ! $comp_cmd -f "$compose_file" pull "$compose_service"; then
+          msg="Error pulling image $img for container $name ($compose_service) in Compose project $compose_project ($compose_file)"
+          echo_log "$msg"
+          notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+          return
+        fi
+
+        msg="Successfully updated image $img for container $name ($compose_service) in Compose project $compose_project ($compose_file)"
+        echo_log "$msg"
+
+        # Stop and remove container
+        if ! $comp_cmd -f "$compose_file" stop "$compose_service"; then
+          msg="Error stopping container $name ($compose_service) in Compose project $compose_project ($compose_file)"
+          echo_log "$msg"
+          notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+          return
+        fi
+        if ! $comp_cmd -f "$compose_file" rm -f "$compose_service"; then
+          msg="Error removing container $name ($compose_service) in Compose project $compose_project ($compose_file)"
+          echo_log "$msg"
+          notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+          return
+        fi
+        msg="Container $name ($compose_service) in Compose project $compose_project ($compose_file) stopped and removed successfully"
+        echo_log "$msg"
+
+        # Recreate container
+        if ! $comp_cmd -f "$compose_file" create --force-recreate --build; then
+          msg="Error recreating container $name ($compose_service) in Compose project $compose_project ($compose_file)"
+          echo_log "$msg"
+          notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+          return
+        fi
+        msg="Container $name ($compose_service) in Compose project $compose_project ($compose_file) recreated successfully"
+        echo_log "$msg"
+        # Start container if it was running before or if start_stopped=true
+        if [ "$start_stopped" = "true" ] || [ "$running" = "true" ]; then
+          if ! $comp_cmd -f "$compose_file" start; then
+            msg="Error starting container $name ($compose_service) in Compose project $compose_project ($compose_file)"
+            echo_log "$msg"
+            notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+            return
+          fi
+          msg="Container $name ($compose_service) in Compose project $compose_project ($compose_file) (re)started successfully"
+          echo_log "$msg"
+        else
+          msg="Container $name ($compose_service) in Compose project $compose_project ($compose_file) not started due to start_stopped=false"
+          echo_log "$msg"
+        fi
+
+        notify_event updated "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+
         return
       fi
+
+      # Skip containers that are part of Swarm stack
       stack_ns="$(docker inspect --format '{{index .Config.Labels "com.docker.stack.namespace"}}' "$cid")"
       if [ -n "$stack_ns" ]; then
         msg="Skipping container $name ($img): part of Docker Swarm stack ($stack_ns) [Docker Swarm currently not supported due to lack of resources for testing, if you want to help, feel free to open an issue or PR]"

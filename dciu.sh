@@ -3,7 +3,7 @@
 # dciu.sh - Docker Container Image Updater (dciu)
 
 # TODO:
-# - [BUG] Handle manifest v1 (legacy) images remote digest generation. \
+# - [CRITICAL BUG] Handle manifest v1 (legacy) images remote digest generation. \
 #   Currently only v2 is supported, v1 generates wrong digest which causes endless update \
 #   (e.g. always update available even if in fact container uses latest image)
 # - Rewrite notify function (and all notify scripts) to load (source) scripts (modules) (. "${module}.sh") \

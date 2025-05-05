@@ -3,6 +3,7 @@
 # dciu.sh - Docker Container Image Updater (dciu)
 
 # TODO:
+# - Create logrotate config for log file
 # - Rewrite notify function (and all notify scripts) to load (source) scripts (modules) (. "${module}.sh") \
 #   and send notifications calling corresponding send function "${module}_send()" instead of executing them directly
 # - Add README.md with usage instructions, examples and configuration

@@ -3,19 +3,14 @@
 # dciu.sh - Docker Container Image Updater (dciu)
 
 # TODO:
-# - [CRITICAL BUG] Handle manifest v1 (legacy) images remote digest generation. \
-#   Currently only v2 is supported, v1 generates wrong digest which causes endless update \
-#   (e.g. always update available even if in fact container uses latest image)
 # - Rewrite notify function (and all notify scripts) to load (source) scripts (modules) (. "${module}.sh") \
 #   and send notifications calling corresponding send function "${module}_send()" instead of executing them directly
-# - [BUG] Handle official Docker images (e.g. mongo) url generation for Docker Hub \
-#   (prefixed with _/ e.g. "hub.docker.com/_/mongo") in notify scripts
 # - Add README.md with usage instructions, examples and configuration
 # - Add LICENSE file and repository information
 # - Refactor code to use functions
 # - Refactor and standardize logging and log messages across script and all notify modules
 # - Add support for recreating containers (created in portainer?) with Portainer webhooks and/or API
-# - Add support for updateting images after certain time passed after image release (e.g. 1 day, 1 week, etc.)
+# - Add support for updating images after certain time passed after image release (e.g. 1 day, 1 week, etc.)
 # - (Probably in very far future) Add support for Docker Swarm and Kubernetes (k8s) (currently only Docker Compose is supported)
 
 export DCIU_VER=1.6.4

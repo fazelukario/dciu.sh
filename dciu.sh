@@ -12,7 +12,7 @@
 # - Add support for recreating containers (created in portainer?) with Portainer webhooks and/or API
 # - (Probably in very far future) Add support for Docker Swarm and Kubernetes (k8s) (currently only Docker Compose is supported)
 
-export DCIU_VER=1.6.3
+export DCIU_VER=1.6.4
 
 export DCIU_PROJECT_NAME="dciu.sh"
 
@@ -302,6 +302,14 @@ process_container() {
         return
       fi
 
+      cmd_script="$SCRIPT_DIR/cmds/${name}.sh"
+      if ! [ -x "$cmd_script" ]; then
+        msg="Error: cmd script not found or not executable: $cmd_script"
+        echo_log "$msg"
+        notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+        return
+      fi
+
       # Pull new image
       if ! docker pull "$img"; then
         msg="Error pulling image $img for container $name"
@@ -330,14 +338,6 @@ process_container() {
       echo_log "$msg"
 
       # Recreate container via user script
-      cmd_script="$SCRIPT_DIR/cmds/${name}.sh"
-      if ! [ -x "$cmd_script" ]; then
-        msg="Error: cmd script not found or not executable: $cmd_script"
-        echo_log "$msg"
-        notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
-        return
-      fi
-
       if ! "$cmd_script"; then
         msg="Error: cmd script failed: $cmd_script"
         echo_log "$msg"

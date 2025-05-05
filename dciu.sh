@@ -5,7 +5,7 @@
 # TODO:
 # - Rewrite notify function (and all notify scripts) to load (source) scripts (modules) (. "${module}.sh") \
 #   and send notifications calling corresponding send function "${module}_send()" instead of executing them directly
-# - Handle official Docker images (e.g. mongo) url generation for Docker Hub (prefixed with _/ e.g. "hub.docker.com/_/mongo") in notify scripts
+# - [BUG] Handle official Docker images (e.g. mongo) url generation for Docker Hub (prefixed with _/ e.g. "hub.docker.com/_/mongo") in notify scripts
 # - Add README.md with usage instructions, examples and configuration
 # - Add LICENSE file and repository information
 # - Refactor code to use functions

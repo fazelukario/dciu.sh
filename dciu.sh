@@ -3,6 +3,7 @@
 # dciu.sh - Docker Container Image Updater (dciu)
 
 # TODO:
+# - [BUG] Handle official Docker images (e.g. mongo) digest generation (currently generates wrong remote digest)
 # - Rewrite notify function (and all notify scripts) to load (source) scripts (modules) (. "${module}.sh") \
 #   and send notifications calling corresponding send function "${module}_send()" instead of executing them directly
 # - [BUG] Handle official Docker images (e.g. mongo) url generation for Docker Hub (prefixed with _/ e.g. "hub.docker.com/_/mongo") in notify scripts

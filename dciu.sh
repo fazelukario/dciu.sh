@@ -35,16 +35,16 @@ else
   export DCIU_NOTIFY_SOURCE="$NOTIFY_SOURCE"
 fi
 
-if ! chmod "+x" "$SCRIPT_DIR/notify/"*.sh; then
-  echo_log "[Error] Failed to make notify scripts executable."
-fi
-
 # Logging helper
 echo_log() {
   msg="$1"
   ts="$(date '+%Y-%m-%d %H:%M:%S')"
   echo "[$ts] $msg" | tee -a "$LOG_FILE"
 }
+
+if ! chmod "+x" "$SCRIPT_DIR/notify/"*.sh; then
+  echo_log "[Error] Failed to make notify scripts executable."
+fi
 
 # Notification helper: call notify modules if exists and event matches filter
 notify_event() {

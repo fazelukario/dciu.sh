@@ -2,7 +2,7 @@
 
 # dciu.sh - Docker Container Image Updater (dciu)
 
-export DCIU_VER=1.5.0
+export DCIU_VER=1.6.0
 
 export DCIU_PROJECT_NAME="dciu.sh"
 
@@ -147,6 +147,10 @@ process_container() {
   st_lbl="$(docker inspect --format "{{index .Config.Labels \"$LABEL_START_STOPPED\"}}" "$cid")"
   start_stopped=${st_lbl:-$START_STOPPED}
 
+  # Determine prune_dangling flag (label overrides config)
+  prune_lbl="$(docker inspect --format "{{index .Config.Labels \"$LABEL_PRUNE_DANGLING\"}}" "$cid")"
+  prune_dangling=${prune_lbl:-$PRUNE_DANGLING}
+
   # Skip if none mode
   if [ "$mode" = "none" ]; then
     echo_log "Skipping container $name ($img) due to selected mode: $mode"
@@ -249,6 +253,16 @@ process_container() {
 
         notify_event updated "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
 
+        # Prune dangling images if enabled
+        if [ "$prune_dangling" = "true" ]; then
+          echo_log "Pruning dangling images"
+          if docker image prune -f; then
+            echo_log "Dangling images pruned successfully"
+          else
+            echo_log "Error pruning dangling images"
+          fi
+        fi
+
         return
       fi
 
@@ -324,6 +338,16 @@ process_container() {
       fi
 
       notify_event updated "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+
+      # Prune dangling images if enabled
+      if [ "$prune_dangling" = "true" ]; then
+        echo_log "Pruning dangling images"
+        if docker image prune -f; then
+          echo_log "Dangling images pruned successfully"
+        else
+          echo_log "Error pruning dangling images"
+        fi
+      fi
     fi
   else
     echo_log "No update for $name ($img)"

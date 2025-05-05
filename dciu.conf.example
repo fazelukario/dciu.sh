@@ -7,11 +7,16 @@ UPDATE_STOPPED='false'
 # After updating stopped containers, whether to start them or not
 START_STOPPED='false'
 
+# Remove dangling images after updates
+PRUNE_DANGLING='false'
+
 # Labels for selecting containers
 LABEL_MODE='dciu.mode'
 # Labels to override stopped containers behavior
 LABEL_UPDATE_STOPPED='dciu.update-stopped'
 LABEL_START_STOPPED='dciu.start-stopped'
+# Label to override dangling image prune behavior per container
+LABEL_PRUNE_DANGLING='dciu.prune-dangling'
 
 # Notify module name (script in notify/ directory)
 NOTIFY_MODULE='discord,telegram'

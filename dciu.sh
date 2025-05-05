@@ -187,6 +187,16 @@ process_container() {
         return
       fi
 
+      # Skip containers that are part of Swarm stack
+      stack_ns="$(docker inspect --format '{{index .Config.Labels "com.docker.stack.namespace"}}' "$cid")"
+      if [ -n "$stack_ns" ]; then
+        msg="Skipping container $name ($img): part of Docker Swarm stack ($stack_ns) \
+        [Docker Swarm currently not supported due to lack of resources for testing, if you want to help, feel free to open an issue or PR]"
+        echo_log "$msg"
+        notify_event update_skipped "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+        return
+      fi
+
       # Handle containers part of Docker Compose project
       compose_project="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$cid")"
       if [ -n "$compose_project" ]; then
@@ -289,16 +299,6 @@ process_container() {
           fi
         fi
 
-        return
-      fi
-
-      # Skip containers that are part of Swarm stack
-      stack_ns="$(docker inspect --format '{{index .Config.Labels "com.docker.stack.namespace"}}' "$cid")"
-      if [ -n "$stack_ns" ]; then
-        msg="Skipping container $name ($img): part of Docker Swarm stack ($stack_ns) \
-        [Docker Swarm currently not supported due to lack of resources for testing, if you want to help, feel free to open an issue or PR]"
-        echo_log "$msg"
-        notify_event update_skipped "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
         return
       fi
 

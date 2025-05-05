@@ -26,7 +26,8 @@ NOTIFY_MODULE='discord,telegram'
 # none: do not notify on any event
 NOTIFY_EVENT='update_available,updated,update_failed'
 
-#NOTIFY_SOURCE='myserver' # Source of the notification (e.g. 'myserver', 'myserver.local', 'myserver.example.com')
+# Source of the notification (e.g. 'myserver', 'myserver.local', 'myserver.example.com')
+#NOTIFY_SOURCE='myserver'
 
 # Optional registry authentication (uncomment if needed) [TODO: implement and test]
 # REGISTRY_USER=''

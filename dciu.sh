@@ -90,7 +90,7 @@ notify_event() {
   for mod in $(echo "$NOTIFY_MODULE" | tr ',' " "); do
     mod_script="$SCRIPT_DIR/notify/${mod}.sh"
     if [ -x "$mod_script" ]; then
-      if ! "$mod_script" "$event" "$container" "$image" "$old_digest" "$new_digest" "$mode" "$running" "$message"; then
+      if ! "$mod_script" "$event" "$container" "$image" "$old_digest" "$new_digest" "$mode" "$running" "$message" >> "$LOG_FILE"; then
         echo_log "[Error] notify module failed: $mod_script"
       else
         echo_log "Notification sent for event $event via module: $mod"
@@ -338,7 +338,7 @@ process_container() {
       echo_log "$msg"
 
       # Recreate container via user script
-      if ! "$cmd_script"; then
+      if ! "$cmd_script" >> "$LOG_FILE"; then
         msg="Error: cmd script failed: $cmd_script"
         echo_log "$msg"
         notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"

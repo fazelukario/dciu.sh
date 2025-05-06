@@ -39,7 +39,7 @@ NOTIFY_EVENT='update_available,updated,update_failed'
 # REGISTRY_PASSWORD=''
 
 # Log file path
-LOG_FILE="$SCRIPT_DIR/dciu.log"
+LOG_FILE="$SCRIPT_DIR/dciu.sh.log"
 
 # Veriables for notify modules must be exported to be available in the notify module scripts (e.g. prefixed with 'export')
 #export DCIU_DISCORD_WEBHOOK_URL='https://discord.com/api/webhooks/some-numbers/some-letters' # Update with actual webhook URL

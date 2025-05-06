@@ -139,7 +139,7 @@ esac
 
 if [ -z "$SMTP_TIMEOUT" ]; then SMTP_TIMEOUT="$SMTP_TIMEOUT_DEFAULT"; fi
 
-SMTP_X_MAILER="$(_clean_email_header "$DCIU_PROJECT_NAME $DCIU_VER --notify-hook smtp")"
+SMTP_X_MAILER="$(_clean_email_header "$DCIU_PROJECT_NAME $DCIU_VER --notify-hook smtp ($SMTP_BIN)")"
 
 # Careful: this may include SMTP_PASSWORD in plaintext!
 if [ "${DCIU_DEBUG:-0}" -ge 1 ]; then

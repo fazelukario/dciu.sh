@@ -3,7 +3,6 @@
 # dciu.sh - Docker Container Image Updater (dciu)
 
 # TODO:
-# - Create logrotate config for log file
 # - Rewrite notify function (and all notify scripts) to load (source) scripts (modules) (. "${module}.sh") \
 #   and send notifications calling corresponding send function "${module}_send()" instead of executing them directly
 # - Add README.md with usage instructions, examples and configuration
@@ -14,7 +13,7 @@
 # - Add support for updating images after certain time passed after image release (e.g. 1 day, 1 week, etc.)
 # - (Probably in very far future) Add support for Docker Swarm and Kubernetes (k8s) (currently only Docker Compose is supported)
 
-export DCIU_VER=1.7.0
+export DCIU_VER=1.7.1
 
 export DCIU_PROJECT_NAME="dciu.sh"
 

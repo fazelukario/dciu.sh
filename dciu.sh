@@ -14,7 +14,7 @@
 # - Add support for updating images after certain time passed after image release (e.g. 1 day, 1 week, etc.)
 # - (Probably in very far future) Add support for Docker Swarm and Kubernetes (k8s) (currently only Docker Compose is supported)
 
-export DCIU_VER=1.6.4
+export DCIU_VER=1.6.5
 
 export DCIU_PROJECT_NAME="dciu.sh"
 
@@ -163,6 +163,10 @@ process_container() {
   prune_lbl="$(docker inspect --format "{{index .Config.Labels \"$LABEL_PRUNE_DANGLING\"}}" "$cid")"
   prune_dangling=${prune_lbl:-$PRUNE_DANGLING}
 
+  # Determine update_compose flag (label overrides config)
+  compose_lbl="$(docker inspect --format "{{index .Config.Labels \"$LABEL_UPDATE_COMPOSE\"}}" "$cid")"
+  update_compose=${compose_lbl:-$UPDATE_COMPOSE}
+
   # Skip if none mode
   if [ "$mode" = "none" ]; then
     echo_log "Skipping container $name ($img) due to selected mode: $mode"
@@ -206,9 +210,9 @@ process_container() {
         compose_service="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$cid")"
         compose_file="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$cid")"
 
-        if [ "$UPDATE_CONTAINERS_IN_COMPOSE" != "true" ]; then
+        if [ "$update_compose" != "true" ]; then
           msg="Skipping container $name ($img) [Service \"$compose_service\"] in Docker Compose project $compose_project ($compose_file): \
-          UPDATE_CONTAINERS_IN_COMPOSE=$UPDATE_CONTAINERS_IN_COMPOSE"
+          update_compose=$update_compose"
           echo_log "$msg"
           notify_event update_skipped "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
           return

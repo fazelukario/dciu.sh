@@ -11,7 +11,7 @@ START_STOPPED='false'
 PRUNE_DANGLING='false'
 
 # Update containers in docker compose stacks
-UPDATE_CONTAINERS_IN_COMPOSE='false'
+UPDATE_COMPOSE='false'
 
 # Labels for selecting containers
 LABEL_MODE='dciu.mode'
@@ -20,6 +20,8 @@ LABEL_UPDATE_STOPPED='dciu.update-stopped'
 LABEL_START_STOPPED='dciu.start-stopped'
 # Label to override dangling image prune behavior per container
 LABEL_PRUNE_DANGLING='dciu.prune-dangling'
+# Label to override update container in docker compose stacks behavior per container
+LABEL_UPDATE_COMPOSE='dciu.update-compose'
 
 # Notify module name (script in notify/ directory)
 NOTIFY_MODULE='discord,telegram'

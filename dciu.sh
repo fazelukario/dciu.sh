@@ -14,7 +14,7 @@
 # - Add support for updating images after certain time passed after image release (e.g. 1 day, 1 week, etc.)
 # - (Probably in very far future) Add support for Docker Swarm and Kubernetes (k8s) (currently only Docker Compose is supported)
 
-export DCIU_VER=1.6.5
+export DCIU_VER=1.7.0
 
 export DCIU_PROJECT_NAME="dciu.sh"
 

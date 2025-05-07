@@ -22,6 +22,15 @@ LABEL_START_STOPPED='dciu.start-stopped'
 LABEL_PRUNE_DANGLING='dciu.prune-dangling'
 # Label to override update container in docker compose stacks behavior per container
 LABEL_UPDATE_COMPOSE='dciu.update-compose'
+# Label to tell dciu that container image in private repository
+# NOTE: For images in Docker Hub's private repositories supported only those that use pure Manifest V2 format
+# (e.g. "application/vnd.docker.distribution.manifest.v2+json")
+# You can check if image supported by running the following command on the latest image and comparing the output:
+# 1: docker inspect --format '{{index .RepoDigests 0}}' "$img" 2> /dev/null | awk -F'@' '{print $2}' | awk -F':' '{print $2}'
+# 2: printf "%s" "$(docker manifest inspect "$img" 2> /dev/null)" | sha256sum | awk '{print substr($1, 1, 64)}'
+# If the output of the commands is equal, then the image is supported by dciu
+# ghcr.io private repositories are supported if you provide a GitHub token with read:packages scope
+LABEL_PRIVATE_REPO='dciu.private-repo'
 
 # Notify module name (script in notify/ directory)
 NOTIFY_MODULE='discord,telegram'
@@ -33,6 +42,9 @@ NOTIFY_EVENT='update_available,updated,update_failed'
 
 # Source of the notification (e.g. 'myserver', 'myserver.local', 'myserver.example.com')
 #NOTIFY_SOURCE='myserver'
+
+# GitHub token with read:packages scope for private repositories
+#GITHUB_TOKEN='ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX' # Update with actual token
 
 # Optional registry authentication (uncomment if needed) [TODO: implement and test]
 # REGISTRY_USER=''

@@ -71,9 +71,7 @@ _🖥 Source:_ \`${src}\`
 EOF
 )
 
-# build Docker Hub URL for the image
-hub_url="https://hub.docker.com/r/${image%%:*}"
-button_url=$(escape_json "$hub_url")
+button_url=$(escape_json "$DCIU_IMAGE_REGISTRY_URL")
 
 # build inline keyboard JSON
 reply_markup=$(

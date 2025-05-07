@@ -65,6 +65,8 @@ if [ -n "$DISCORD_AVATAR_URL" ]; then
   avatar_field=",\"avatar_url\":\"$(escape_json "$DISCORD_AVATAR_URL")\""
 fi
 
+button_url=$(escape_json "$DCIU_IMAGE_REGISTRY_URL")
+
 # Build payload with Container and Components V2
 payload=$(
   cat << EOF
@@ -138,7 +140,7 @@ payload=$(
               "type": 2,
               "style": 5,
               "label": "View on Docker Hub 🐳",
-              "url": "https://hub.docker.com/r/${img%%:*}"
+              "url": "$button_url"
             }
           ]
         },

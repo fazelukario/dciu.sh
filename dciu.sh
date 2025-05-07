@@ -7,13 +7,15 @@
 #   and send notifications calling corresponding send function "${module}_send()" instead of executing them directly
 # - Add README.md with usage instructions, examples and configuration
 # - Add LICENSE file and repository information
+# - Add support for private repositories in Docker Hub
+# - Add support for custom and private registries (e.g. GLCR, ACR, ECR, etc.)
 # - Refactor code to use functions
 # - Refactor and standardize logging and log messages across script and all notify modules
 # - Add support for recreating containers (created in portainer?) with Portainer webhooks and/or API
 # - Add support for updating images after certain time passed after image release (e.g. 1 day, 1 week, etc.)
 # - (Probably in very far future) Add support for Docker Swarm and Kubernetes (k8s) (currently only Docker Compose is supported)
 
-export DCIU_VER=1.7.1
+export DCIU_VER=2.0.0
 
 export DCIU_PROJECT_NAME="dciu.sh"
 
@@ -29,12 +31,8 @@ fi
 # shellcheck source=dciu.conf
 . "$CONFIG_FILE"
 
-if [ -z "$NOTIFY_SOURCE" ]; then
-  DCIU_NOTIFY_SOURCE="$(hostname -f)"
-  export DCIU_NOTIFY_SOURCE
-else
-  export DCIU_NOTIFY_SOURCE="$NOTIFY_SOURCE"
-fi
+if [ -z "$NOTIFY_SOURCE" ]; then NOTIFY_SOURCE="$(hostname -f)"; fi
+export DCIU_NOTIFY_SOURCE="$NOTIFY_SOURCE"
 
 # Logging helper
 echo_log() {
@@ -104,6 +102,57 @@ notify_event() {
   done
 }
 
+# Parse image information
+parse_image() {
+  img="$1"
+
+  # Parse image registry information
+  # check if first part of image name contains a dot, then it's a registry domain and not from hub.docker.com
+  if printf '%s' "$img" | awk -F':' '{print $1}' | awk -F'/' '{print $1}' | grep -q '\.'; then
+    IMAGE_REGISTRY=$(echo "$img" | awk -F'/' '{print $1}')
+    IMAGE_REGISTRY_API=$IMAGE_REGISTRY
+    IMAGE_PATH_FULL=$(echo "$img" | cut -d '/' -f '2-') # consider posibility of moving to awk in the future
+    IMAGE_NAMESPACE=$(echo "$IMAGE_PATH_FULL" | awk -F'/' '{print $1}')
+  elif [ "$(echo "$img" | awk -F'/' '{print NF-1}')" = 0 ]; then
+    IMAGE_REGISTRY="hub.docker.com"
+    IMAGE_REGISTRY_API="hub.docker.com"
+    IMAGE_PATH_FULL="library/$img"
+    IMAGE_NAMESPACE="library"
+  else
+    IMAGE_REGISTRY="hub.docker.com"
+    IMAGE_REGISTRY_API="hub.docker.com"
+    IMAGE_PATH_FULL="$img"
+    IMAGE_NAMESPACE=$(echo "$IMAGE_PATH_FULL" | awk -F'/' '{print $1}')
+  fi
+
+  # parse image information
+  if printf '%s' "$IMAGE_PATH_FULL" | grep -q ':'; then
+    IMAGE_PATH=$(echo "$IMAGE_PATH_FULL" | awk -F':' '{print $1}')
+    IMAGE_REPOSITORY=$(echo "$IMAGE_PATH" | awk -F'/' '{print $2}')
+    IMAGE_TAG=$(echo "$IMAGE_PATH_FULL" | awk -F':' '{print $2}')
+    #IMAGE_LOCAL="$img" # currently not used
+  else
+    IMAGE_PATH="$IMAGE_PATH_FULL"
+    IMAGE_REPOSITORY=$(echo "$IMAGE_PATH" | awk -F'/' '{print $2}')
+    IMAGE_TAG="latest"
+    #IMAGE_LOCAL="$img:latest" # currently not used
+  fi
+
+  # build registry URL for the image
+  if [ "$IMAGE_REGISTRY" = "hub.docker.com" ]; then
+    if [ "$IMAGE_NAMESPACE" = "library" ]; then
+      IMAGE_REGISTRY_URL="https://${IMAGE_REGISTRY}/_/${IMAGE_REPOSITORY}"
+    else
+      IMAGE_REGISTRY_URL="https://${IMAGE_REGISTRY}/r/${IMAGE_PATH}"
+    fi
+  else
+    IMAGE_REGISTRY_URL="https://${IMAGE_REGISTRY}/${IMAGE_PATH}"
+  fi
+
+  # export variables for use in notify modules
+  export DCIU_IMAGE_REGISTRY_URL="$IMAGE_REGISTRY_URL"
+}
+
 # Get local image digest (first RepoDigest)
 get_local_digest() {
   img="$1"
@@ -113,13 +162,45 @@ get_local_digest() {
 # Get remote image digest without pulling
 get_remote_digest() {
   img="$1"
-  # manifest inspect contacts registry to get manifest digest
-  printf "%s" "$(docker manifest inspect "$img" 2> /dev/null)" | sha256sum | awk '{print substr($1, 1, 64)}'
+
+  if [ "$IMAGE_REGISTRY" = "hub.docker.com" ] && [ "$PRIVATE_REPO" != "true" ]; then
+    # Get manifest digest from Docker Hub API
+    api="https://${IMAGE_REGISTRY_API}/v2/namespaces/${IMAGE_NAMESPACE}/repositories/${IMAGE_REPOSITORY}/tags/${IMAGE_TAG}"
+    resp=$(curl -s "$api")
+    digest=$(echo "$resp" | jq -r '.digest' | awk -F':' '{print $2}') # consider posibility of replacing jq with pure grep, awk and etc. in the future
+    printf "%s" "$digest"
+  elif [ "$IMAGE_REGISTRY" = "ghcr.io" ]; then
+    # Token URL for GHCR
+    token_url="https://${IMAGE_REGISTRY_API}/token?scope=repository:${IMAGE_PATH}:pull"
+    # Retrieve token: use basic auth if credentials provided
+    if [ -n "$GITHUB_TOKEN" ] || [ "$PRIVATE_REPO" = "true" ]; then
+      if [ -z "$GITHUB_TOKEN" ]; then
+        echo_log "Error: GITHUB_TOKEN must be set for private repository access ($img)"
+        printf "%s" ""
+        return 1
+      fi
+      token=$(curl -s -u "username:$GITHUB_TOKEN" "$token_url" | awk -F'"' 'NR==1{print $4}')
+    else
+      token=$(curl -s "$token_url" | awk -F'"' 'NR==1{print $4}')
+    fi
+    # Get digest from response header
+    header=$(curl -sI -H "Authorization: Bearer $token" -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+      "https://${IMAGE_REGISTRY_API}/v2/${IMAGE_PATH}/manifests/${IMAGE_TAG}")
+    digest=$(echo "$header" | grep -i 'docker-content-digest' | awk '{print $2}' | tr -d '\r' | tr -d '\n' | awk -F':' '{print $2}')
+    printf "%s" "$digest"
+  else
+    # manifest inspect contacts registry to get manifest digest
+    # supported only those images that use pure Manifest V2 format
+    printf "%s" "$(docker manifest inspect "$img" 2> /dev/null)" | sha256sum | awk '{print substr($1, 1, 64)}'
+  fi
 }
 
 # Check if update available: outputs old and new digests and returns 1 if update needed
 check_update() {
   img="$1"
+
+  parse_image "$img"
+
   old="$(get_local_digest "$img")"
   new="$(get_remote_digest "$img")"
 
@@ -165,6 +246,9 @@ process_container() {
   # Determine update_compose flag (label overrides config)
   compose_lbl="$(docker inspect --format "{{index .Config.Labels \"$LABEL_UPDATE_COMPOSE\"}}" "$cid")"
   update_compose=${compose_lbl:-$UPDATE_COMPOSE}
+
+  # Determine if container using image from private repository
+  PRIVATE_REPO="$(docker inspect --format "{{index .Config.Labels \"$LABEL_PRIVATE_REPO\"}}" "$cid")"
 
   # Skip if none mode
   if [ "$mode" = "none" ]; then

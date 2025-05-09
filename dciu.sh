@@ -10,7 +10,7 @@
 # - Add support for private repositories in Docker Hub
 # - Add support for custom and private registries (e.g. GLCR, ACR, ECR, etc.)
 # - Refactor code to use functions
-# - Refactor and standardize logging and log messages across script and all notify modules
+# - Refactor and standardize logging and log messages across script and all notify modules (inspire from acme.sh)
 # - Add support for recreating containers (created in portainer?) with Portainer webhooks and/or API
 # - Add support for updating images after certain time passed after image release (e.g. 1 day, 1 week, etc.)
 # - (Probably in very far future) Add support for Docker Swarm and Kubernetes (k8s) (currently only Docker Compose is supported)

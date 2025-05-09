@@ -53,7 +53,13 @@ NOTIFY_EVENT='update_available,updated,update_failed'
 # Log file path
 LOG_FILE="$SCRIPT_DIR/dciu.sh.log"
 
-# Veriables for notify modules must be exported to be available in the notify module scripts (e.g. prefixed with 'export')
+# Debug mode: if set to '1', dciu will run in debug mode
+#DEBUG='0'
+
+# NO_TIMESTAMP: if set to '1', dciu will not add timestamps to log messages
+#NO_TIMESTAMP='0'
+
+# Variables for notify modules must be exported to be available in the notify module scripts (e.g. prefixed with 'export')
 #export DCIU_DISCORD_WEBHOOK_URL='https://discord.com/api/webhooks/some-numbers/some-letters' # Update with actual webhook URL
 #export DCIU_DISCORD_AVATAR_URL='https://example.com/avatar.png'  # Update with actual avatar URL
 #export DCIU_DISCORD_USERNAME='dciu.sh'

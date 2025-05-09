@@ -3,8 +3,6 @@
 # dciu.sh - Docker Container Image Updater (dciu)
 
 # TODO:
-# - Rewrite notify function (and all notify scripts) to load (source) scripts (modules) (. "${module}.sh") \
-#   and send notifications calling corresponding send function "${module}_send()" instead of executing them directly
 # - Add README.md with usage instructions, examples and configuration
 # - Add LICENSE file and repository information
 # - Add support for private repositories in Docker Hub
@@ -15,7 +13,7 @@
 # - Add support for updating images after certain time passed after image release (e.g. 1 day, 1 week, etc.)
 # - (Probably in very far future) Add support for Docker Swarm and Kubernetes (k8s) (currently only Docker Compose is supported)
 
-export DCIU_VER=2.0.0
+export DCIU_VER=2.1.0
 
 export DCIU_PROJECT_NAME="dciu.sh"
 
@@ -31,8 +29,54 @@ fi
 # shellcheck source=dciu.conf
 . "$CONFIG_FILE"
 
+if [ -z "$LOG_FILE" ]; then
+  LOG_FILE="$SCRIPT_DIR/dciu.sh.log"
+fi
+
+if [ -z "$DEBUG" ]; then
+  DEBUG='0'
+fi
+
 if [ -z "$NOTIFY_SOURCE" ]; then NOTIFY_SOURCE="$(hostname -f)"; fi
 export DCIU_NOTIFY_SOURCE="$NOTIFY_SOURCE"
+
+_printargs() {
+  _exitstatus="$?"
+  if [ -z "$NO_TIMESTAMP" ] || [ "$NO_TIMESTAMP" = "0" ]; then
+    printf -- "%s" "[$(date '+%Y-%m-%d %H:%M:%S')] "
+  fi
+  if [ -z "$2" ]; then
+    printf -- "%s" "$1"
+  else
+    printf -- "%s" "$1='$2'"
+  fi
+  printf "\n"
+  # return the saved exit status
+  return "$_exitstatus"
+}
+
+_log() {
+  [ -z "$LOG_FILE" ] && return
+  _printargs "$@" >> "$LOG_FILE"
+}
+
+_info() {
+  _log "$@"
+  _printargs "$@"
+}
+
+_err() {
+  _log "$@"
+  _printargs "$@" >&2
+  return 1
+}
+
+_debug() {
+  if [ "${DEBUG:-0}" -ge 1 ]; then
+    _log "$@"
+    _printargs "$@"
+  fi
+}
 
 # Logging helper
 echo_log() {
@@ -41,9 +85,25 @@ echo_log() {
   echo "[$ts] $msg" | tee -a "$LOG_FILE"
 }
 
-if ! chmod "+x" "$SCRIPT_DIR/notify/"*.sh; then
-  echo_log "[Error] Failed to make notify scripts executable."
-fi
+# helper: check if command exists
+_exists() {
+  cmd="$1"
+  if [ -z "$cmd" ]; then return 1; fi
+
+  if eval type type > /dev/null 2>&1; then
+    eval type "$cmd" > /dev/null 2>&1
+  elif command > /dev/null 2>&1; then
+    command -v "$cmd" > /dev/null 2>&1
+  else
+    which "$cmd" > /dev/null 2>&1
+  fi
+  ret="$?"
+  _debug "$cmd exists=$ret"
+  return $ret
+}
+
+# function to escape JSON strings
+escape_json() { printf "%s" "$1" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;s/\n/\\n/g;ta'; }
 
 # Notification helper: call notify modules if exists and event matches filter
 notify_event() {
@@ -57,12 +117,12 @@ notify_event() {
   message="$8"
 
   if [ -z "$NOTIFY_MODULE" ]; then
-    echo_log "No notify module configured, skipping notification for event: $event"
-    return
+    _debug "No notify module configured, which means it's disabled, so will just return. Skipping notification for event: $event"
+    return 0
   fi
   if [ -z "$NOTIFY_EVENT" ]; then
-    echo_log "No notify event configured, skipping notification for event: $event"
-    return
+    _debug "No notify event configured, which means it's disabled, so will just return. Skipping notification for event: $event"
+    return 0
   fi
 
   notify_events=$(printf "%s" "$NOTIFY_EVENT" | tr ',' ' ')
@@ -71,35 +131,66 @@ notify_event() {
   # If NOTIFY_EVENT includes "none", disable all notifications
   case " $notify_events " in
     *" none "*)
-      echo_log "Skipping notification for event: $event due to filter NOTIFY_EVENT=\"none\""
-      return
+      _debug "Skipping notification for event: $event due to filter NOTIFY_EVENT=\"none\""
+      return 0
       ;;
     *" all "*) ;; # notify all events
     *)
       case " $notify_events " in
         *" $event "*) ;; # allowed event
         *)
-          echo_log "Skipping notification for event: $event due to filter NOTIFY_EVENT=\"$NOTIFY_EVENT\""
-          return
+          _debug "Skipping notification for event: $event due to filter NOTIFY_EVENT=\"$NOTIFY_EVENT\""
+          return 0
           ;;
       esac
       ;;
   esac
 
+  _send_err=0
   for mod in $(echo "$NOTIFY_MODULE" | tr ',' " "); do
-    mod_script="$SCRIPT_DIR/notify/${mod}.sh"
-    if [ -x "$mod_script" ]; then
-      if ! "$mod_script" "$event" "$container" "$image" "$old_digest" "$new_digest" "$mode" "$running" "$message" >> "$LOG_FILE"; then
-        echo_log "[Error] notify module failed: $mod_script"
-      else
-        echo_log "Notification sent for event $event via module: $mod"
+    mod_file="$SCRIPT_DIR/notify/${mod}.sh"
+    _info "Sending notification for event $event via module: $mod"
+    _debug "Found $mod_file for notify module $mod"
+
+    if [ -z "$mod_file" ]; then
+      _err "Cannot find notify module file for $mod"
+      continue
+    fi
+
+    if ! (
+      # Check if notify module file exists
+      if ! [ -f "$mod_file" ]; then
+        _err "Notify module $mod_file is not a file or not found"
+        return 1
       fi
-    elif [ -f "$mod_script" ]; then
-      echo_log "[Error] notify module not executable: $mod_script"
+
+      # shellcheck disable=SC1090
+      if ! . "$mod_file"; then
+        _err "Error loading file $mod_file. Please check your API file and try again."
+        return 1
+      fi
+
+      mod_command="${mod}_send"
+      if ! _exists "$mod_command"; then
+        _err "It seems that your API file is not correct. Make sure it has a function named: $mod_command"
+        return 1
+      fi
+
+      if ! $mod_command "$event" "$container" "$image" "$old_digest" "$new_digest" "$mode" "$running" "$message"; then
+        _err "Error sending notification for event $event using $mod_command"
+        return 1
+      fi
+
+      return 0
+    ); then
+      _err "Error setting notify module $mod_file"
+      _send_err=1
     else
-      echo_log "[Error] notify module not found: $mod_script"
+      _info "Notification sent for event $event via module: $mod"
     fi
   done
+
+  return $_send_err
 }
 
 # Parse image information
@@ -139,6 +230,7 @@ parse_image() {
   fi
 
   # build registry URL for the image
+  # shellcheck disable=SC2034
   if [ "$IMAGE_REGISTRY" = "hub.docker.com" ]; then
     if [ "$IMAGE_NAMESPACE" = "library" ]; then
       IMAGE_REGISTRY_URL="https://${IMAGE_REGISTRY}/_/${IMAGE_REPOSITORY}"
@@ -148,9 +240,6 @@ parse_image() {
   else
     IMAGE_REGISTRY_URL="https://${IMAGE_REGISTRY}/${IMAGE_PATH}"
   fi
-
-  # export variables for use in notify modules
-  export DCIU_IMAGE_REGISTRY_URL="$IMAGE_REGISTRY_URL"
 }
 
 # Get local image digest (first RepoDigest)

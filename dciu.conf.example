@@ -60,9 +60,9 @@ LOG_FILE="$SCRIPT_DIR/dciu.sh.log"
 #NO_TIMESTAMP='0'
 
 # Variables for notify modules must be exported to be available in the notify module scripts (e.g. prefixed with 'export')
-#export DCIU_DISCORD_WEBHOOK_URL='https://discord.com/api/webhooks/some-numbers/some-letters' # Update with actual webhook URL
-#export DCIU_DISCORD_AVATAR_URL='https://example.com/avatar.png'  # Update with actual avatar URL
-#export DCIU_DISCORD_USERNAME='dciu.sh'
+#DISCORD_WEBHOOK_URL='https://discord.com/api/webhooks/some-numbers/some-letters' # Update with actual webhook URL
+#DISCORD_AVATAR_URL='https://example.com/avatar.png'  # Update with actual avatar URL
+#DISCORD_USERNAME='dciu.sh'
 
-#export DCIU_TELEGRAM_BOT_APITOKEN='123456789:ABCxyz' # Update with actual bot token
-#export DCIU_TELEGRAM_BOT_CHATID='123456789' # Update with actual chat ID
+#TELEGRAM_BOT_APITOKEN='123456789:ABCxyz' # Update with actual bot token
+#TELEGRAM_BOT_CHATID='123456789' # Update with actual chat ID

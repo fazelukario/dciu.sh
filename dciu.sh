@@ -13,11 +13,12 @@
 # - Add support for updating images after certain time passed after image release (e.g. 1 day, 1 week, etc.)
 # - (Probably in very far future) Add support for Docker Swarm and Kubernetes (k8s) (currently only Docker Compose is supported)
 
-export DCIU_VER=2.1.0
+# shellcheck disable=SC2034
+VER=2.1.0
 
-export DCIU_PROJECT_NAME="dciu.sh"
+PROJECT_NAME="dciu.sh"
 
-export DCIU_PROJECT="https://github.com/fazelukario/$DCIU_PROJECT_NAME"
+PROJECT="https://github.com/fazelukario/$PROJECT_NAME"
 
 # Load configuration
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
@@ -29,16 +30,11 @@ fi
 # shellcheck source=dciu.conf
 . "$CONFIG_FILE"
 
-if [ -z "$LOG_FILE" ]; then
-  LOG_FILE="$SCRIPT_DIR/dciu.sh.log"
-fi
+if [ -z "$LOG_FILE" ]; then LOG_FILE="$SCRIPT_DIR/dciu.sh.log"; fi
 
-if [ -z "$DEBUG" ]; then
-  DEBUG='0'
-fi
+if [ -z "$DEBUG" ]; then DEBUG='0'; fi
 
 if [ -z "$NOTIFY_SOURCE" ]; then NOTIFY_SOURCE="$(hostname -f)"; fi
-export DCIU_NOTIFY_SOURCE="$NOTIFY_SOURCE"
 
 _printargs() {
   _exitstatus="$?"

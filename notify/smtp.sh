@@ -30,16 +30,6 @@ smtp_send() {
   SMTP_SECURE_DEFAULT="tls"
   SMTP_TIMEOUT_DEFAULT="30"
 
-  if [ -n "$DCIU_SMTP_FROM" ]; then SMTP_FROM="$DCIU_SMTP_FROM"; fi
-  if [ -n "$DCIU_SMTP_TO" ]; then SMTP_TO="$DCIU_SMTP_TO"; fi
-  if [ -n "$DCIU_SMTP_HOST" ]; then SMTP_HOST="$DCIU_SMTP_HOST"; fi
-  if [ -n "$DCIU_SMTP_PORT" ]; then SMTP_PORT="$DCIU_SMTP_PORT"; fi
-  if [ -n "$DCIU_SMTP_SECURE" ]; then SMTP_SECURE="$DCIU_SMTP_SECURE"; fi
-  if [ -n "$DCIU_SMTP_USERNAME" ]; then SMTP_USERNAME="$DCIU_SMTP_USERNAME"; fi
-  if [ -n "$DCIU_SMTP_PASSWORD" ]; then SMTP_PASSWORD="$DCIU_SMTP_PASSWORD"; fi
-  if [ -n "$DCIU_SMTP_TIMEOUT" ]; then SMTP_TIMEOUT="$DCIU_SMTP_TIMEOUT"; fi
-  if [ -n "$DCIU_SMTP_BIN" ]; then SMTP_BIN="$DCIU_SMTP_BIN"; fi
-
   # find or validate SMTP_BIN
   if [ -n "$SMTP_BIN" ] && ! _exists "$SMTP_BIN"; then
     echo "[Error] SMTP_BIN '$SMTP_BIN' not found" >&2
@@ -124,7 +114,7 @@ smtp_send() {
 
   if [ -z "$SMTP_TIMEOUT" ]; then SMTP_TIMEOUT="$SMTP_TIMEOUT_DEFAULT"; fi
 
-  SMTP_X_MAILER="$(_clean_email_header "$DCIU_PROJECT_NAME $DCIU_VER --notify-hook smtp ($SMTP_BIN)")"
+  SMTP_X_MAILER="$(_clean_email_header "$PROJECT_NAME $VER --notify-hook smtp ($SMTP_BIN)")"
 
   # Careful: this may include SMTP_PASSWORD in plaintext!
   if [ "${DEBUG:-0}" -ge 1 ]; then
@@ -133,7 +123,7 @@ smtp_send() {
     SMTP_SHOW_TRANSCRIPT=""
   fi
 
-  SMTP_SUBJECT="[dciu.sh] Container \"$container\" on $DCIU_NOTIFY_SOURCE: $event"
+  SMTP_SUBJECT="[dciu.sh] Container \"$container\" on $NOTIFY_SOURCE: $event"
   SMTP_SUBJECT=$(_clean_email_header "$SMTP_SUBJECT")
 
   content=$(
@@ -145,7 +135,7 @@ New Digest: $new_digest
 Running: $running
 Mode: $mode
 Message: $message
-Source: $DCIU_NOTIFY_SOURCE
+Source: $NOTIFY_SOURCE
 EOF
   )
 
@@ -358,9 +348,3 @@ PYTHON
 
   return 0
 }
-
-# If script executed directly, call send function
-if [ "${0##*/}" = "smtp.sh" ]; then
-  smtp_send "$@"
-  exit $?
-fi

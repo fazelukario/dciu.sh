@@ -19,10 +19,6 @@ discord_send() {
   running="$7"
   message="$8"
 
-  if [ -n "$DCIU_DISCORD_WEBHOOK_URL" ]; then DISCORD_WEBHOOK_URL="$DCIU_DISCORD_WEBHOOK_URL"; fi
-  if [ -n "$DCIU_DISCORD_USERNAME" ]; then DISCORD_USERNAME="$DCIU_DISCORD_USERNAME"; fi
-  if [ -n "$DCIU_DISCORD_AVATAR_URL" ]; then DISCORD_AVATAR_URL="$DCIU_DISCORD_AVATAR_URL"; fi
-
   # Ensure webhook URL is set
   if [ -z "$DISCORD_WEBHOOK_URL" ]; then
     echo "[Error] DISCORD_WEBHOOK_URL is not set" >&2
@@ -51,7 +47,7 @@ discord_send() {
   md=$(escape_json "$mode")
   msg=$(escape_json "$message")
   ts=$(escape_json "$timestamp")
-  src=$(escape_json "$DCIU_NOTIFY_SOURCE")
+  src=$(escape_json "$NOTIFY_SOURCE")
 
   # Build optional fields
   username_field=""

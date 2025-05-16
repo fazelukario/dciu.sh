@@ -19,10 +19,6 @@ telegram_send() {
   running="$7"
   message="$8"
 
-  if [ -n "$DCIU_TELEGRAM_BOT_APITOKEN" ]; then TELEGRAM_BOT_APITOKEN="$DCIU_TELEGRAM_BOT_APITOKEN"; fi
-  if [ -n "$DCIU_TELEGRAM_BOT_CHATID" ]; then TELEGRAM_BOT_CHATID="$DCIU_TELEGRAM_BOT_CHATID"; fi
-  if [ -n "$DCIU_TELEGRAM_BOT_URLBASE" ]; then TELEGRAM_BOT_URLBASE="$DCIU_TELEGRAM_BOT_URLBASE"; fi
-
   # check required variables
   if [ -z "$TELEGRAM_BOT_APITOKEN" ]; then
     echo "[Error] TELEGRAM_BOT_APITOKEN is not set" >&2
@@ -50,7 +46,7 @@ telegram_send() {
   rn=$(escape_markdown "$running")
   md=$(escape_markdown "$mode")
   msg=$(escape_markdown "$message")
-  src=$(escape_markdown "$DCIU_NOTIFY_SOURCE")
+  src=$(escape_markdown "$NOTIFY_SOURCE")
 
   # build message text with here-doc for POSIX compliance
   text=$(

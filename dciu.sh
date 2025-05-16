@@ -99,7 +99,7 @@ _exists() {
 }
 
 # function to escape JSON strings
-escape_json() { printf "%s" "$1" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;s/\n/\\n/g;ta'; }
+_escape_json() { printf "%s" "$1" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;s/\n/\\n/g;ta'; }
 
 # Notification helper: call notify modules if exists and event matches filter
 notify_event() {
@@ -191,24 +191,24 @@ notify_event() {
 
 # Parse image information
 parse_image() {
-  img="$1"
+  _img_to_parse="$1"
 
   # Parse image registry information
   # check if first part of image name contains a dot, then it's a registry domain and not from hub.docker.com
-  if printf '%s' "$img" | awk -F':' '{print $1}' | awk -F'/' '{print $1}' | grep -q '\.'; then
-    IMAGE_REGISTRY=$(echo "$img" | awk -F'/' '{print $1}')
+  if printf '%s' "$_img_to_parse" | awk -F':' '{print $1}' | awk -F'/' '{print $1}' | grep -q '\.'; then
+    IMAGE_REGISTRY=$(echo "$_img_to_parse" | awk -F'/' '{print $1}')
     IMAGE_REGISTRY_API=$IMAGE_REGISTRY
-    IMAGE_PATH_FULL=$(echo "$img" | cut -d '/' -f '2-') # consider posibility of moving to awk in the future
+    IMAGE_PATH_FULL=$(echo "$_img_to_parse" | cut -d '/' -f '2-') # consider posibility of moving to awk in the future
     IMAGE_NAMESPACE=$(echo "$IMAGE_PATH_FULL" | awk -F'/' '{print $1}')
-  elif [ "$(echo "$img" | awk -F'/' '{print NF-1}')" = 0 ]; then
+  elif [ "$(echo "$_img_to_parse" | awk -F'/' '{print NF-1}')" = 0 ]; then
     IMAGE_REGISTRY="hub.docker.com"
     IMAGE_REGISTRY_API="hub.docker.com"
-    IMAGE_PATH_FULL="library/$img"
+    IMAGE_PATH_FULL="library/$_img_to_parse"
     IMAGE_NAMESPACE="library"
   else
     IMAGE_REGISTRY="hub.docker.com"
     IMAGE_REGISTRY_API="hub.docker.com"
-    IMAGE_PATH_FULL="$img"
+    IMAGE_PATH_FULL="$_img_to_parse"
     IMAGE_NAMESPACE=$(echo "$IMAGE_PATH_FULL" | awk -F'/' '{print $1}')
   fi
 
@@ -217,12 +217,12 @@ parse_image() {
     IMAGE_PATH=$(echo "$IMAGE_PATH_FULL" | awk -F':' '{print $1}')
     IMAGE_REPOSITORY=$(echo "$IMAGE_PATH" | awk -F'/' '{print $2}')
     IMAGE_TAG=$(echo "$IMAGE_PATH_FULL" | awk -F':' '{print $2}')
-    #IMAGE_LOCAL="$img" # currently not used
+    #IMAGE_LOCAL="$_img_to_parse" # currently not used
   else
     IMAGE_PATH="$IMAGE_PATH_FULL"
     IMAGE_REPOSITORY=$(echo "$IMAGE_PATH" | awk -F'/' '{print $2}')
     IMAGE_TAG="latest"
-    #IMAGE_LOCAL="$img:latest" # currently not used
+    #IMAGE_LOCAL="$_img_to_parse:latest" # currently not used
   fi
 
   # build registry URL for the image
@@ -284,8 +284,6 @@ get_remote_digest() {
 check_update() {
   img="$1"
 
-  parse_image "$img"
-
   old="$(get_local_digest "$img")"
   new="$(get_remote_digest "$img")"
 
@@ -341,6 +339,8 @@ process_container() {
     return
   fi
 
+  parse_image "$img"
+
   # Check for update
   if dig="$(check_update "$img")"; then
     echo_log "No update for $name ($img)"
@@ -354,7 +354,7 @@ process_container() {
 
   msg="$mode: update available for $name ($img): $old_digest -> $new_digest"
   echo_log "$msg"
-  notify_event update_available "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+  (notify_event update_available "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
 
   if ! [ "$mode" = "autoupdate" ]; then
     return
@@ -365,7 +365,7 @@ process_container() {
     # Stopped container
     msg="Skipping stopped container $name ($img): update_stopped=$update_stopped"
     echo_log "$msg"
-    notify_event update_skipped "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+    (notify_event update_skipped "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
     return
   fi
 
@@ -375,7 +375,7 @@ process_container() {
     msg="Skipping container $name ($img): part of Docker Swarm stack ($stack_ns) \
         [Docker Swarm currently not supported due to lack of resources for testing, if you want to help, feel free to open an issue or PR]"
     echo_log "$msg"
-    notify_event update_skipped "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+    (notify_event update_skipped "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
     return
   fi
 
@@ -389,7 +389,7 @@ process_container() {
       msg="Skipping container $name ($img) [Service \"$compose_service\"] in Docker Compose project $compose_project ($compose_file): \
           update_compose=$update_compose"
       echo_log "$msg"
-      notify_event update_skipped "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+      (notify_event update_skipped "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
       return
     fi
 
@@ -397,7 +397,7 @@ process_container() {
     if [ -z "$compose_file" ]; then
       msg="Error: Docker Compose file not found for container $name ($img)"
       echo_log "$msg"
-      notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+      (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
       return
     fi
 
@@ -411,14 +411,14 @@ process_container() {
     else
       msg="Error: docker compose and docker-compose not found"
       echo_log "$msg"
-      notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+      (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
       return
     fi
 
     if ! $comp_cmd -f "$compose_file" pull "$compose_service"; then
       msg="Error pulling image $img for container $name ($compose_service) in Compose project $compose_project ($compose_file)"
       echo_log "$msg"
-      notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+      (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
       return
     fi
 
@@ -429,13 +429,13 @@ process_container() {
     if ! $comp_cmd -f "$compose_file" stop "$compose_service"; then
       msg="Error stopping container $name ($compose_service) in Compose project $compose_project ($compose_file)"
       echo_log "$msg"
-      notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+      (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
       return
     fi
     if ! $comp_cmd -f "$compose_file" rm -f "$compose_service"; then
       msg="Error removing container $name ($compose_service) in Compose project $compose_project ($compose_file)"
       echo_log "$msg"
-      notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+      (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
       return
     fi
 
@@ -446,7 +446,7 @@ process_container() {
     if ! $comp_cmd -f "$compose_file" create --force-recreate --build; then
       msg="Error recreating container $name ($compose_service) in Compose project $compose_project ($compose_file)"
       echo_log "$msg"
-      notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+      (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
       return
     fi
 
@@ -458,7 +458,7 @@ process_container() {
       if ! $comp_cmd -f "$compose_file" start; then
         msg="Error starting container $name ($compose_service) in Compose project $compose_project ($compose_file)"
         echo_log "$msg"
-        notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+        (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
         return
       fi
 
@@ -469,7 +469,7 @@ process_container() {
       echo_log "$msg"
     fi
 
-    notify_event updated "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+    (notify_event updated "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
 
     # Prune dangling images if enabled
     if ! [ "$prune_dangling" = "true" ]; then
@@ -490,7 +490,7 @@ process_container() {
   if ! [ -x "$cmd_script" ]; then
     msg="Error: cmd script not found or not executable: $cmd_script"
     echo_log "$msg"
-    notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+    (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
     return
   fi
 
@@ -498,7 +498,7 @@ process_container() {
   if ! docker pull "$img"; then
     msg="Error pulling image $img for container $name"
     echo_log "$msg"
-    notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+    (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
   fi
 
   msg="Successfully pulled image $img for container $name"
@@ -508,13 +508,13 @@ process_container() {
   if ! docker stop "$cid"; then
     msg="Error stopping container $name ($img)"
     echo_log "$msg"
-    notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+    (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
     return
   fi
   if ! docker rm "$cid"; then
     msg="Error removing container $name ($img)"
     echo_log "$msg"
-    notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+    (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
     return
   fi
 
@@ -525,7 +525,7 @@ process_container() {
   if ! "$cmd_script" >> "$LOG_FILE"; then
     msg="Error: cmd script failed: $cmd_script"
     echo_log "$msg"
-    notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+    (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
     return
   fi
 
@@ -537,7 +537,7 @@ process_container() {
     if ! docker start "$name"; then
       msg="Error: failed to start container $name"
       echo_log "$msg"
-      notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+      (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
       return
     fi
 
@@ -548,7 +548,7 @@ process_container() {
     echo_log "$msg"
   fi
 
-  notify_event updated "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg"
+  (notify_event updated "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
 
   # Prune dangling images if enabled
   if ! [ "$prune_dangling" = "true" ]; then
@@ -568,7 +568,7 @@ main() {
   # Get all containers
   cids="$(docker ps -q -a)"
   for cid in $cids; do
-    process_container "$cid"
+    (process_container "$cid")
   done
   echo_log "All containers processed."
 }

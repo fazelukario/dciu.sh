@@ -67,7 +67,7 @@ EOF
 
   _debug "text" "$text"
 
-  button_url=$(escape_json "$IMAGE_REGISTRY_URL")
+  button_url=$(_escape_json "$IMAGE_REGISTRY_URL")
 
   _debug "button_url" "$button_url"
 
@@ -84,8 +84,8 @@ EOF
   payload=$(
     cat << EOF
 {
-  "chat_id":"$(escape_json "$TELEGRAM_BOT_CHATID")",
-  "text":"$(escape_json "$text")",
+  "chat_id":"$(_escape_json "$TELEGRAM_BOT_CHATID")",
+  "text":"$(_escape_json "$text")",
   "parse_mode":"MarkdownV2",
   "reply_markup":$reply_markup
 }

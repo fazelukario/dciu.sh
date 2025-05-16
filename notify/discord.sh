@@ -38,30 +38,30 @@ discord_send() {
   timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
   # Escape dynamic values
-  evt=$(escape_json "$event")
-  cn=$(escape_json "$container")
-  img=$(escape_json "$image")
-  od=$(escape_json "$old_digest")
-  nd=$(escape_json "$new_digest")
-  rn=$(escape_json "$running")
-  md=$(escape_json "$mode")
-  msg=$(escape_json "$message")
-  ts=$(escape_json "$timestamp")
-  src=$(escape_json "$NOTIFY_SOURCE")
+  evt=$(_escape_json "$event")
+  cn=$(_escape_json "$container")
+  img=$(_escape_json "$image")
+  od=$(_escape_json "$old_digest")
+  nd=$(_escape_json "$new_digest")
+  rn=$(_escape_json "$running")
+  md=$(_escape_json "$mode")
+  msg=$(_escape_json "$message")
+  ts=$(_escape_json "$timestamp")
+  src=$(_escape_json "$NOTIFY_SOURCE")
 
   # Build optional fields
   username_field=""
   avatar_field=""
   if [ -n "$DISCORD_USERNAME" ]; then
-    username_field=",\"username\":\"$(escape_json "$DISCORD_USERNAME")\""
+    username_field=",\"username\":\"$(_escape_json "$DISCORD_USERNAME")\""
     _debug "username_field" "$username_field"
   fi
   if [ -n "$DISCORD_AVATAR_URL" ]; then
-    avatar_field=",\"avatar_url\":\"$(escape_json "$DISCORD_AVATAR_URL")\""
+    avatar_field=",\"avatar_url\":\"$(_escape_json "$DISCORD_AVATAR_URL")\""
     _debug "avatar_field" "$avatar_field"
   fi
 
-  button_url=$(escape_json "$IMAGE_REGISTRY_URL")
+  button_url=$(_escape_json "$IMAGE_REGISTRY_URL")
 
   _debug "button_url" "$button_url"
 

@@ -15,7 +15,7 @@
 # - (Probably in very far future) Add support for Docker Swarm and Kubernetes (k8s) (currently only Docker Compose is supported)
 
 # shellcheck disable=SC2034
-VER=2.2.1
+VER=2.2.0
 
 PROJECT_NAME="dciu.sh"
 
@@ -405,9 +405,9 @@ process_container() {
     msg="Updating Docker Compose service $compose_service in project $compose_project ($compose_file)"
     echo_log "$msg"
 
-    if _exists "docker compose"; then
+    if command -v docker compose > /dev/null 2>&1; then
       comp_cmd="docker compose"
-    elif _exists "docker-compose"; then
+    elif command -v docker-compose > /dev/null 2>&1; then
       comp_cmd="docker-compose"
     else
       msg="Error: docker compose and docker-compose not found"

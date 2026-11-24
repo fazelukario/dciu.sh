@@ -98,25 +98,27 @@ EOF
   _debug "bot_api_url" "$bot_api_url"
 
   # send the message
-  curl -s -w "\n%{http_code}" -X POST "$bot_api_url" \
+  # Capture in the current shell: `$?` is curl's exit status only right after the assignment, never inside a pipe
+  response="$(curl -s -w "\n%{http_code}" -X POST "$bot_api_url" \
     -H "Content-Type: application/json" \
-    --data "$payload" | {
-    _ret="$?"
-    read -r response
-    read -r status_code
-    _debug "status_code" "$status_code"
-    _debug "Response:"
-    _debug "$response"
+    --data "$payload")"
+  _ret="$?"
+  if [ "$_ret" != "0" ]; then
+    _err "Please refer to https://curl.haxx.se/libcurl/c/libcurl-errors.html for error code: $_ret"
+    return 1
+  fi
 
-    if [ "$_ret" != "0" ]; then
-      _err "Please refer to https://curl.haxx.se/libcurl/c/libcurl-errors.html for error code: $_ret"
-    fi
+  # -w appends the HTTP code as the last line; the body itself may end with or contain newlines
+  status_code="$(printf "%s" "$response" | tail -n 1)"
+  response="$(printf "%s" "$response" | sed '$d')"
+  _debug "status_code" "$status_code"
+  _debug "Response:"
+  _debug "$response"
 
-    if [ "$status_code" -lt 200 ] || [ "$status_code" -ge 300 ]; then
-      _err "[Error] Failed to send Telegram notification, HTTP status: $status_code" >&2
-      return 1
-    fi
-  }
+  if [ "$status_code" -lt 200 ] || [ "$status_code" -ge 300 ]; then
+    _err "[Error] Failed to send Telegram notification, HTTP status: $status_code" >&2
+    return 1
+  fi
 
   return 0
 }

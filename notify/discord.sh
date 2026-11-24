@@ -159,25 +159,27 @@ EOF
   webhook_url="$DISCORD_WEBHOOK_URL?wait=true&with_components=true"
   _debug "webhook_url" "$webhook_url"
 
-  curl -s -w "\n%{http_code}" -X POST "$webhook_url" \
+  # Capture in the current shell: `$?` is curl's exit status only right after the assignment, never inside a pipe
+  response="$(curl -s -w "\n%{http_code}" -X POST "$webhook_url" \
     -H "Content-Type: application/json" \
-    --data "$payload" | {
-    _ret="$?"
-    read -r response
-    read -r status_code
-    _debug "status_code" "$status_code"
-    _debug "Response:"
-    _debug "$response"
+    --data "$payload")"
+  _ret="$?"
+  if [ "$_ret" != "0" ]; then
+    _err "Please refer to https://curl.haxx.se/libcurl/c/libcurl-errors.html for error code: $_ret"
+    return 1
+  fi
 
-    if [ "$_ret" != "0" ]; then
-      _err "Please refer to https://curl.haxx.se/libcurl/c/libcurl-errors.html for error code: $_ret"
-    fi
+  # -w appends the HTTP code as the last line; the body itself may end with (Discord does) or contain newlines
+  status_code="$(printf "%s" "$response" | tail -n 1)"
+  response="$(printf "%s" "$response" | sed '$d')"
+  _debug "status_code" "$status_code"
+  _debug "Response:"
+  _debug "$response"
 
-    if [ "$status_code" -lt 200 ] || [ "$status_code" -ge 300 ]; then
-      _err "[Error] Failed to send Discord notification, HTTP status: $status_code" >&2
-      return 1
-    fi
-  }
+  if [ "$status_code" -lt 200 ] || [ "$status_code" -ge 300 ]; then
+    _err "[Error] Failed to send Discord notification, HTTP status: $status_code" >&2
+    return 1
+  fi
 
   return 0
 }

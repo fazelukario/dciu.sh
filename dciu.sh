@@ -13,9 +13,10 @@
 # - Add support for recreating containers (created in portainer?) with Portainer webhooks and/or API
 # - Add support for updating images after certain time passed after image release (e.g. 1 day, 1 week, etc.)
 # - (Probably in very far future) Add support for Docker Swarm and Kubernetes (k8s) (currently only Docker Compose is supported)
+# - (Probably in very far future) Add syslog support (SYS_LOG with syslog levels, like acme.sh)
 
 # shellcheck disable=SC2034
-VER=2.2.0
+VER=2.2.1
 
 PROJECT_NAME="dciu.sh"
 

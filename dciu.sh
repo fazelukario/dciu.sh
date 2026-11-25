@@ -50,6 +50,7 @@ DEFAULT_MODE=monitor \
   DEFAULT_COMPOSE_BUILD=false \
   DEFAULT_SKIP_IDENTICAL_IMAGES=true \
   DEFAULT_SKIP_LOCAL_IMAGES=true \
+  DEFAULT_HTTP_TIMEOUT=30 \
   DEFAULT_OUTPUT_INSECURE=false \
   DEFAULT_NO_TIMESTAMP=false
 
@@ -64,6 +65,7 @@ COMPOSE_RECREATE recreate
 COMPOSE_BUILD bool
 SKIP_IDENTICAL_IMAGES bool
 SKIP_LOCAL_IMAGES bool
+HTTP_TIMEOUT seconds
 OUTPUT_INSECURE bool
 NO_TIMESTAMP bool"
 
@@ -216,7 +218,7 @@ _init_log_levels() {
 # type value: check the value of a setting, any case, surrounding spaces and line breaks ignored (no forks).
 # 0: valid, the canonical value in _sv; 1: invalid, _sv is the trimmed value and _sv_must lists the accepted ones;
 # 2: empty. Types: bool (1 yes true -> true, 0 no false -> false), mode (autoupdate monitor none), recreate
-# (service stack)
+# (service stack), seconds (0-86400, leading zeros dropped)
 _setting_value() {
   _sv="$2"
   _sv="${_sv#"${_sv%%[![:space:]]*}"}"
@@ -249,6 +251,27 @@ _setting_value() {
         [Ss][Tt][Aa][Cc][Kk]) _sv=stack ;;
         *) return 1 ;;
       esac
+      ;;
+    seconds)
+      _sv_must="a number of seconds 0-86400"
+      case "$_sv" in
+        *[!0-9]*) return 1 ;;
+      esac
+      while :; do
+        case "$_sv" in
+          0?*) _sv="${_sv#0}" ;;
+          *) break ;;
+        esac
+      done
+      # no arithmetic on a number that may not fit
+      case "$_sv" in
+        ??????*) return 1 ;;
+      esac
+      [ "$_sv" -le 86400 ] || return 1
+      ;;
+    *)
+      _sv_must="(unknown type $1)"
+      return 1
       ;;
   esac
 }
@@ -343,6 +366,7 @@ if [ -z "$LABEL_COMPOSE_RECREATE" ]; then LABEL_COMPOSE_RECREATE='dciu.compose-r
 if [ -z "$LABEL_COMPOSE_BUILD" ]; then LABEL_COMPOSE_BUILD='dciu.compose-build'; fi
 if [ -z "$LABEL_SKIP_IDENTICAL_IMAGES" ]; then LABEL_SKIP_IDENTICAL_IMAGES='dciu.skip-identical-images'; fi
 if [ -z "$LABEL_SKIP_LOCAL_IMAGES" ]; then LABEL_SKIP_LOCAL_IMAGES='dciu.skip-local-images'; fi
+if [ -z "$LABEL_HTTP_TIMEOUT" ]; then LABEL_HTTP_TIMEOUT='dciu.http-timeout'; fi
 
 # helper: check if command exists
 _exists() {
@@ -429,6 +453,12 @@ _post() {
 
   # no -L: a moved endpoint must fail instead of curl re-sending the POST as GET
   set -- --silent --dump-header "$HTTP_HEADER" --user-agent "$USER_AGENT" -X "$httpmethod"
+  # the container's HTTP_TIMEOUT, else the global one; 0 = no limit
+  _post_max_time="${http_timeout:-$HTTP_TIMEOUT}"
+  case "$_post_max_time" in
+    '' | 0 | *[!0-9]*) ;;
+    *) set -- "$@" --max-time "$_post_max_time" ;;
+  esac
   if [ -n "$_postContentType" ]; then
     set -- "$@" -H "Content-Type: $_postContentType"
   fi
@@ -470,6 +500,12 @@ _get() {
   fi
 
   set -- --silent -L --dump-header "$HTTP_HEADER" --user-agent "$USER_AGENT"
+  # the container's HTTP_TIMEOUT, else the global one; 0 = no limit
+  _get_max_time="${http_timeout:-$HTTP_TIMEOUT}"
+  case "$_get_max_time" in
+    '' | 0 | *[!0-9]*) ;;
+    *) set -- "$@" --max-time "$_get_max_time" ;;
+  esac
   if [ -n "$_get_timeout" ]; then
     set -- "$@" --connect-timeout "$_get_timeout"
   fi
@@ -788,6 +824,16 @@ get_remote_digest() {
   return "$_grd_ret"
 }
 
+# what rc: check_error for a failed curl request to what; curl error 28 within a time limit is HTTP_TIMEOUT's
+_curl_reason() {
+  _cr_max_time="${http_timeout:-$HTTP_TIMEOUT}"
+  case "$2:$_cr_max_time" in
+    28: | 28:0 | 28:*[!0-9]*) check_error="cannot reach $1 (curl error $2)" ;;
+    28:*) check_error="no answer from $1 within ${_cr_max_time}s (HTTP_TIMEOUT)" ;;
+    *) check_error="cannot reach $1 (curl error $2)" ;;
+  esac
+}
+
 # the Docker Hub and ghcr.io lookups need curl and the temp file for the response headers: without them every lookup
 # would look like a registry problem
 _require_http() {
@@ -817,7 +863,7 @@ _get_dockerhub_digest() {
   _gdd_body="$(_get "https://${IMAGE_REGISTRY_API}/v2/namespaces/${IMAGE_NAMESPACE}/repositories/${IMAGE_REPOSITORY}/tags/${IMAGE_TAG}")"
   _gdd_ret="$?"
   if [ "$_gdd_ret" != "0" ]; then
-    check_error="cannot reach the Docker Hub API (curl error $_gdd_ret)"
+    _curl_reason "the Docker Hub API" "$_gdd_ret"
     return 1
   fi
   _gdd_status="$(_http_status)"
@@ -865,7 +911,7 @@ _get_ghcr_digest() {
   _ggd_ret="$?"
   _H1=""
   if [ "$_ggd_ret" != "0" ]; then
-    check_error="cannot reach ghcr.io (curl error $_ggd_ret)"
+    _curl_reason "ghcr.io" "$_ggd_ret"
     return 1
   fi
   _ggd_status="$(_http_status)"
@@ -893,7 +939,7 @@ _get_ghcr_digest() {
   _get "https://${IMAGE_REGISTRY_API}/v2/${IMAGE_PATH}/manifests/${IMAGE_TAG}" "onlyheader" > /dev/null
   _ggd_ret="$?"
   if [ "$_ggd_ret" != "0" ]; then
-    check_error="cannot reach ghcr.io (curl error $_ggd_ret)"
+    _curl_reason "ghcr.io" "$_ggd_ret"
     return 1
   fi
   _ggd_status="$(_http_status)"
@@ -911,6 +957,55 @@ _get_ghcr_digest() {
     check_error="no Docker-Content-Digest in the ghcr.io manifest response"
     return 1
   fi
+}
+
+# options...: _gmd_out = the output of `docker manifest inspect options... $_gmd_img` within HTTP_TIMEOUT (empty when
+# it failed); 1 with check_error when it did not finish in time (the shell's "Terminated"/"Killed" stays out)
+_gmd_manifest() {
+  _gmd_out="$( { _with_timeout "$_gmd_max_time" docker manifest inspect "$@" "$_gmd_img"; } 2> /dev/null)"
+  case "$?" in
+    0) ;;
+    124 | 137 | 143)
+      check_error="docker manifest inspect did not finish within ${_gmd_max_time}s (HTTP_TIMEOUT)"
+      return 1
+      ;;
+    *) _gmd_out="" ;;
+  esac
+}
+
+# TIMEOUT_CMD: 'timeout' when this system has one that works like coreutils' (busybox's before 1.30 needs -t);
+# TIMEOUT_KILL=1 when it can also kill (-k): the docker CLI ignores SIGTERM while it waits for a registry
+_init_timeout() {
+  TIMEOUT_CMD=""
+  TIMEOUT_KILL=""
+  if timeout -k 1 1 true > /dev/null 2>&1; then
+    TIMEOUT_CMD="timeout"
+    TIMEOUT_KILL=1
+  elif timeout 1 true > /dev/null 2>&1; then
+    TIMEOUT_CMD="timeout"
+  fi
+  _debug "TIMEOUT_CMD" "$TIMEOUT_CMD"
+  _debug "TIMEOUT_KILL" "$TIMEOUT_KILL"
+}
+
+# secs cmd args...: run cmd under TIMEOUT_CMD when there is one and secs > 0 (killed 2 s after SIGTERM when it ignores
+# it), else as is; returns cmd's code: 124 or 143 (busybox) when it was stopped, 137 when it had to be killed
+_with_timeout() {
+  _wt_secs="$1"
+  shift
+  case "$_wt_secs" in
+    '' | 0 | *[!0-9]*) ;;
+    *)
+      if [ -n "$TIMEOUT_CMD" ] && [ "$TIMEOUT_KILL" = 1 ]; then
+        "$TIMEOUT_CMD" -k 2 "$_wt_secs" "$@"
+        return
+      elif [ -n "$TIMEOUT_CMD" ]; then
+        "$TIMEOUT_CMD" "$_wt_secs" "$@"
+        return
+      fi
+      ;;
+  esac
+  "$@"
 }
 
 # registry: 0 when the Docker daemon treats it as insecure (plain HTTP, no TLS verification): localhost, 127.0.0.0/8
@@ -935,14 +1030,16 @@ _get_manifest_digest() {
   if _registry_insecure "$IMAGE_REGISTRY"; then
     set -- --insecure
   fi
-  _gmd_out="$(docker manifest inspect -v "$@" "$_gmd_img" 2> /dev/null)" || _gmd_out=""
+  _gmd_max_time="${http_timeout:-$HTTP_TIMEOUT}"
+  _gmd_manifest -v "$@" || return 1
   case "$_gmd_out" in
     "{"*)
       remote_digest="$(printf '%s\n' "$_gmd_out" | awk 'match($0, /"digest": *"sha256:[0-9a-f]+"/) {
         d = substr($0, RSTART, RLENGTH); sub(/^.*sha256:/, "", d); sub(/"$/, "", d); print d; exit }')"
       ;;
     "["*)
-      if _gmd_out="$(docker manifest inspect "$@" "$_gmd_img" 2> /dev/null)" && [ -n "$_gmd_out" ]; then
+      _gmd_manifest "$@" || return 1
+      if [ -n "$_gmd_out" ]; then
         remote_digest="$(printf "%s" "$_gmd_out" | sha256sum | awk '{print substr($1, 1, 64)}')"
       fi
       ;;
@@ -1044,6 +1141,7 @@ _read_container() {
 {{join (split (index .Config.Labels \"$LABEL_COMPOSE_BUILD\") \"\\n\") \" \"}}
 {{join (split (index .Config.Labels \"$LABEL_SKIP_IDENTICAL_IMAGES\") \"\\n\") \" \"}}
 {{join (split (index .Config.Labels \"$LABEL_SKIP_LOCAL_IMAGES\") \"\\n\") \" \"}}
+{{join (split (index .Config.Labels \"$LABEL_HTTP_TIMEOUT\") \"\\n\") \" \"}}
 dciu-inspect-end"
   _rc_out="$(docker container inspect --format "$_rc_format" "$_rc_cid" 2> /dev/null)" || return 1
 
@@ -1070,6 +1168,7 @@ dciu-inspect-end"
     IFS= read -r _rc_compose_build
     IFS= read -r _rc_skip_identical
     IFS= read -r _rc_skip_local
+    IFS= read -r _rc_http_timeout
     IFS= read -r _rc_end
     # a line break in a value shifts every later line: nothing may follow the end marker
     if IFS= read -r _rc_more; then _rc_end=""; fi
@@ -1106,6 +1205,8 @@ EOF
   skip_identical_images="$_sv"
   _rc_setting bool SKIP_LOCAL_IMAGES "$LABEL_SKIP_LOCAL_IMAGES" "$_rc_skip_local"
   skip_local_images="$_sv"
+  _rc_setting seconds HTTP_TIMEOUT "$LABEL_HTTP_TIMEOUT" "$_rc_http_timeout"
+  http_timeout="$_sv"
 
   _debug "container" "$name ($_rc_cid)"
   _debug "image" "$img"
@@ -1117,6 +1218,7 @@ EOF
   _debug "private_repo" "$private_repo"
   _debug "skip_identical_images" "$skip_identical_images"
   _debug "skip_local_images" "$skip_local_images"
+  _debug "http_timeout" "$http_timeout"
 
   # the compose labels only matter (and are only checked) for a Compose container
   if [ -n "$compose_project" ]; then
@@ -1523,6 +1625,7 @@ main() {
     return 1
   fi
   _init_image_store
+  _init_timeout
 
   # like acme.sh's cron: 1 when a setting was invalid or any container's check or update failed (skips and failed
   # notifications don't count)

@@ -52,6 +52,10 @@ SKIP_LOCAL_IMAGES='true'
 # 'docker login' for the other registries), 'false' (default). Per container: LABEL_PRIVATE_REPO below
 PRIVATE_REPO='false'
 
+# Time limit in seconds for each registry lookup and notification request, '0' = no limit (default '30'). Pulls and
+# Docker Compose commands have none: they can take long. Per container: LABEL_HTTP_TIMEOUT below
+HTTP_TIMEOUT='30'
+
 # Labels for selecting containers
 LABEL_MODE='dciu.mode'
 # Labels to override stopped containers behavior
@@ -68,6 +72,8 @@ LABEL_COMPOSE_BUILD='dciu.compose-build'
 LABEL_SKIP_IDENTICAL_IMAGES='dciu.skip-identical-images'
 # Label to override SKIP_LOCAL_IMAGES per container
 LABEL_SKIP_LOCAL_IMAGES='dciu.skip-local-images'
+# Label to override HTTP_TIMEOUT per container (its registry lookups and notifications)
+LABEL_HTTP_TIMEOUT='dciu.http-timeout'
 # Label to override PRIVATE_REPO per container (the image is in a private repository)
 # Docker Hub private repositories and registries other than Docker Hub and ghcr.io are looked up with
 # 'docker manifest inspect', using the credentials of 'docker login'. A single-platform image is compared exactly; a

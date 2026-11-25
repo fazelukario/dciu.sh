@@ -1428,8 +1428,13 @@ _update_compose_service() {
     return 1
   fi
   # the image the Compose file names now: when its image: changed after the container was created, the pull fetched
-  # that one, not the container's tag (the container's own image name when compose can't say)
-  _ucs_image="$(_compose config --images "$compose_service" 2> /dev/null | head -n 1)"
+  # that one, not the container's tag. Read from the service's own entry (config --images lists its depends_on
+  # services' images too); the container's own image name when compose or jq can't say
+  _ucs_image=""
+  if _exists jq; then
+    _ucs_image="$(_compose config --format json "$compose_service" 2> /dev/null |
+      jq -r --arg s "$compose_service" '.services[$s].image // empty' 2> /dev/null)"
+  fi
   if [ -z "$_ucs_image" ]; then
     _ucs_image="$img"
   fi

@@ -134,6 +134,23 @@ _hide_secret() {
   printf "%s" "$__hs_out$__hs_text"
 }
 
+# digits -> 0-3 without arithmetic (a 20-digit value is no valid number for test): leading zeros are ignored,
+# anything above 3 is 3
+__log_level_clamp() {
+  __llc_value="$1"
+  while :; do
+    case "$__llc_value" in
+      0?*) __llc_value="${__llc_value#0}" ;;
+      *) break ;;
+    esac
+  done
+  case "$__llc_value" in
+    '') __llc_value=0 ;;
+    [4-9] | ??*) __llc_value=3 ;;
+  esac
+  printf '%s' "$__llc_value"
+}
+
 # DEBUG and LOG_LEVEL must be non-negative integers; anything else is reported and treated as 0
 _init_log_levels() {
   case "$DEBUG" in
@@ -142,12 +159,17 @@ _init_log_levels() {
       DEBUG="$DEBUG_LEVEL_NONE"
       ;;
   esac
+  DEBUG="$(__log_level_clamp "$DEBUG")"
   case "$LOG_LEVEL" in
     *[!0-9]*)
       _err "Invalid LOG_LEVEL='$LOG_LEVEL' (must be a number 0-3), using 0"
       LOG_LEVEL=0
       ;;
   esac
+  # empty LOG_LEVEL: follows DEBUG
+  if [ -n "$LOG_LEVEL" ]; then
+    LOG_LEVEL="$(__log_level_clamp "$LOG_LEVEL")"
+  fi
 }
 
 # Load configuration
@@ -1102,13 +1124,17 @@ main() {
     _err "Cannot write to LOG_FILE='$_unwritable_log_file', logging to the console only"
   fi
 
-  # One temp file per run for the response headers of _post, never one inherited from the environment
-  # (the EXIT trap deletes it). Without it notifications fail, but containers are still processed.
+  # One temp file per run for the response headers of _post/_get, never one inherited from the environment.
+  # The traps are set before it is created, so the EXIT trap deletes it however the run ends.
+  # Without it registry lookups and notifications fail, but every container is still processed.
   HTTP_HEADER=""
-  _inithttp
   trap '_cleanup' EXIT
+  trap 'exit 129' HUP
   trap 'exit 130' INT
+  trap 'exit 131' QUIT
+  trap 'exit 141' PIPE
   trap 'exit 143' TERM
+  _inithttp
 
   # Get all containers
   if ! cids="$(docker ps -q -a)"; then

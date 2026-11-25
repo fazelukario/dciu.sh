@@ -175,6 +175,6 @@ EOF
     2[0-9][0-9]) return 0 ;;
   esac
   _err "Failed to send Discord notification, HTTP status: $status_code"
-  _err "$response"
+  [ -z "$response" ] || _err "$response"
   return 1
 }

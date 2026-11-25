@@ -14,7 +14,6 @@
 # - (Probably in very far future) Add syslog support (SYS_LOG with syslog levels, like acme.sh)
 # - (Probably in very far future) Add colored output (like acme.sh's __red/__green)
 
-# shellcheck disable=SC2034
 VER=2.3.0
 
 PROJECT_NAME="dciu.sh"

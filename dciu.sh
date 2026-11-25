@@ -14,6 +14,7 @@
 # - Add support for updating images after certain time passed after image release (e.g. 1 day, 1 week, etc.)
 # - (Probably in very far future) Add support for Docker Swarm and Kubernetes (k8s) (currently only Docker Compose is supported)
 # - (Probably in very far future) Add syslog support (SYS_LOG with syslog levels, like acme.sh)
+# - (Probably in very far future) Add colored output (like acme.sh's __red/__green)
 
 # shellcheck disable=SC2034
 VER=2.2.1

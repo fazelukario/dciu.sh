@@ -166,6 +166,12 @@ if [ -z "$DEBUG" ]; then DEBUG='0'; fi
 
 if [ -z "$NOTIFY_SOURCE" ]; then NOTIFY_SOURCE="$(hostname -f)"; fi
 
+# settings added after 2.3.0: existing configs don't have them
+if [ -z "$COMPOSE_RECREATE" ]; then COMPOSE_RECREATE='service'; fi
+if [ -z "$COMPOSE_BUILD" ]; then COMPOSE_BUILD='false'; fi
+if [ -z "$LABEL_COMPOSE_RECREATE" ]; then LABEL_COMPOSE_RECREATE='dciu.compose-recreate'; fi
+if [ -z "$LABEL_COMPOSE_BUILD" ]; then LABEL_COMPOSE_BUILD='dciu.compose-build'; fi
+
 # helper: check if command exists
 _exists() {
   cmd="$1"
@@ -658,6 +664,10 @@ _read_container() {
 {{index .Config.Labels \"com.docker.compose.project\"}}
 {{index .Config.Labels \"com.docker.compose.service\"}}
 {{index .Config.Labels \"com.docker.compose.project.config_files\"}}
+{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}
+{{index .Config.Labels \"com.docker.compose.project.environment_file\"}}
+{{index .Config.Labels \"$LABEL_COMPOSE_RECREATE\"}}
+{{index .Config.Labels \"$LABEL_COMPOSE_BUILD\"}}
 dciu-inspect-end"
   _rc_out="$(docker container inspect --format "$_rc_format" "$_rc_cid" 2> /dev/null)" || return 1
 
@@ -677,6 +687,10 @@ dciu-inspect-end"
     IFS= read -r compose_project
     IFS= read -r compose_service
     IFS= read -r compose_file
+    IFS= read -r compose_working_dir
+    IFS= read -r compose_env_files
+    IFS= read -r _rc_compose_recreate
+    IFS= read -r _rc_compose_build
     IFS= read -r _rc_end
     # a line break in a value shifts every later line: nothing may follow the end marker
     if IFS= read -r _rc_more; then _rc_end=""; fi
@@ -703,6 +717,27 @@ EOF
   _debug "prune_dangling" "$prune_dangling"
   _debug "update_compose" "$update_compose"
   _debug "private_repo" "$PRIVATE_REPO"
+
+  if [ -n "$compose_project" ]; then
+    compose_recreate="${_rc_compose_recreate:-$COMPOSE_RECREATE}"
+    case "$compose_recreate" in
+      service | stack) ;;
+      *)
+        _err "Invalid COMPOSE_RECREATE='$compose_recreate' for container $name, using 'service'"
+        compose_recreate="service"
+        ;;
+    esac
+    compose_build="${_rc_compose_build:-$COMPOSE_BUILD}"
+    case "$compose_build" in
+      true | false) ;;
+      *)
+        _err "Invalid COMPOSE_BUILD='$compose_build' for container $name, using 'false'"
+        compose_build="false"
+        ;;
+    esac
+    _debug "compose_recreate" "$compose_recreate"
+    _debug "compose_build" "$compose_build"
+  fi
 }
 
 # event msg: send the notification for the current container (notify_event logs its own failures)
@@ -749,7 +784,39 @@ _finish_update() {
   _info "Dangling images pruned successfully"
 }
 
-# Update the container's Docker Compose service; returns 0 (also when skipped), or 1 when the update failed
+# args...: run compose ($comp_cmd) for the container's own project: its name, working dir, config files and env files
+# from the labels Compose set on the container (comma-separated lists, each entry one argument; a missing label drops
+# its option), then args
+_compose() {
+  _co_n="$#"
+  set -- "$@" -p "$compose_project"
+  if [ -n "$compose_working_dir" ]; then
+    set -- "$@" --project-directory "$compose_working_dir"
+  fi
+  _co_list="$compose_file,"
+  while [ -n "$_co_list" ]; do
+    _co_item="${_co_list%%,*}"
+    _co_list="${_co_list#*,}"
+    if [ -n "$_co_item" ]; then set -- "$@" -f "$_co_item"; fi
+  done
+  _co_list="$compose_env_files,"
+  while [ -n "$_co_list" ]; do
+    _co_item="${_co_list%%,*}"
+    _co_list="${_co_list#*,}"
+    if [ -n "$_co_item" ]; then set -- "$@" --env-file "$_co_item"; fi
+  done
+  # move the caller's args from the front to the end
+  while [ "$_co_n" -gt 0 ]; do
+    set -- "$@" "$1"
+    shift
+    _co_n=$((_co_n - 1))
+  done
+  $comp_cmd "$@"
+}
+
+# Update the container's Docker Compose service: pull its image, then recreate the service (COMPOSE_RECREATE=service,
+# its depends_on services are left alone) or every service of the project (COMPOSE_RECREATE=stack) with 'up', started
+# when the container was running or start_stopped=true. Returns 0 (also when skipped), or 1 when the update failed
 _update_compose_service() {
   if [ "$update_compose" != "true" ]; then
     _update_skipped "Skipping container $name ($img) [Service \"$compose_service\"] in Docker Compose project $compose_project ($compose_file): update_compose=$update_compose"
@@ -764,9 +831,9 @@ _update_compose_service() {
 
   _info "Updating Docker Compose service $compose_service in project $compose_project ($compose_file)"
 
-  if command -v docker compose > /dev/null 2>&1; then
+  if docker compose version > /dev/null 2>&1; then
     comp_cmd="docker compose"
-  elif command -v docker-compose > /dev/null 2>&1; then
+  elif _exists docker-compose; then
     comp_cmd="docker-compose"
   else
     _update_failed "Neither docker compose nor docker-compose found"
@@ -776,39 +843,41 @@ _update_compose_service() {
   # the container as the messages below name it
   _ucs_ctr="$name ($compose_service) in Compose project $compose_project ($compose_file)"
 
-  if ! $comp_cmd -f "$compose_file" pull "$compose_service"; then
+  if ! _compose pull "$compose_service"; then
     _update_failed "Error pulling image $img for container $_ucs_ctr"
     return 1
   fi
   _info "Successfully updated image $img for container $_ucs_ctr"
 
-  # Stop and remove container
-  if ! $comp_cmd -f "$compose_file" stop "$compose_service"; then
-    _update_failed "Error stopping container $_ucs_ctr"
-    return 1
+  _ucs_start=""
+  if [ "$running" = "true" ] || [ "$start_stopped" = "true" ]; then
+    _ucs_start=1
+    set -- up -d
+  else
+    set -- up --no-start
   fi
-  if ! $comp_cmd -f "$compose_file" rm -f "$compose_service"; then
-    _update_failed "Error removing container $_ucs_ctr"
-    return 1
+  if [ "$compose_recreate" = "stack" ]; then
+    _ucs_what="All services of Compose project $compose_project ($compose_file)"
+    set -- "$@" --force-recreate
+  else
+    _ucs_what="Container $_ucs_ctr"
+    set -- "$@" --no-deps --force-recreate
   fi
-  _info "Container $_ucs_ctr stopped and removed successfully"
+  if [ "$compose_build" = "true" ]; then
+    set -- "$@" --build
+  fi
+  if [ "$compose_recreate" != "stack" ]; then
+    set -- "$@" "$compose_service"
+  fi
 
-  # Recreate container
-  if ! $comp_cmd -f "$compose_file" create --force-recreate --build; then
+  if ! _compose "$@"; then
     _update_failed "Error recreating container $_ucs_ctr"
     return 1
   fi
-  _info "Container $_ucs_ctr recreated successfully"
-
-  # Start container if it was running before or if start_stopped=true
-  if [ "$start_stopped" = "true" ] || [ "$running" = "true" ]; then
-    if ! $comp_cmd -f "$compose_file" start; then
-      _update_failed "Error starting container $_ucs_ctr"
-      return 1
-    fi
-    msg="Container $_ucs_ctr (re)started successfully"
+  if [ -n "$_ucs_start" ]; then
+    msg="$_ucs_what recreated and (re)started successfully"
   else
-    msg="Container $_ucs_ctr not started due to start_stopped=$start_stopped"
+    msg="$_ucs_what recreated, not started due to start_stopped=$start_stopped"
   fi
   _info "$msg"
 

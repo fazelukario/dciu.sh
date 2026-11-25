@@ -41,8 +41,8 @@ telegram_send() {
   evt=$(escape_markdown "$event")
   cn=$(escape_markdown "$container")
   img=$(escape_markdown "$image")
-  od=$(escape_markdown "$old_digest")
-  nd=$(escape_markdown "$new_digest")
+  od=$(escape_markdown "${old_digest:-unknown}")
+  nd=$(escape_markdown "${new_digest:-unknown}")
   rn=$(escape_markdown "$running")
   md=$(escape_markdown "$mode")
   msg=$(escape_markdown "$message")
@@ -112,6 +112,6 @@ EOF
     2[0-9][0-9]) return 0 ;;
   esac
   _err "Failed to send Telegram notification, HTTP status: $status_code"
-  _err "$response"
+  [ -z "$response" ] || _err "$response"
   return 1
 }

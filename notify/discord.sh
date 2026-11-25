@@ -31,6 +31,7 @@ discord_send() {
     updated) color=65280 ;;             # green
     update_failed) color=16711680 ;;    # red
     update_skipped) color=8421504 ;;    # grey
+    check_failed) color=16753920 ;;     # orange
     *) color=0 ;;                       # default
   esac
 
@@ -41,8 +42,8 @@ discord_send() {
   evt=$(_escape_json "$event")
   cn=$(_escape_json "$container")
   img=$(_escape_json "$image")
-  od=$(_escape_json "$old_digest")
-  nd=$(_escape_json "$new_digest")
+  od=$(_escape_json "${old_digest:-unknown}")
+  nd=$(_escape_json "${new_digest:-unknown}")
   rn=$(_escape_json "$running")
   md=$(_escape_json "$mode")
   msg=$(_escape_json "$message")
@@ -155,8 +156,12 @@ EOF
 
   _debug2 "payload" "$payload"
 
-  # Send to Discord webhook with components V2 enabled
-  webhook_url="$DISCORD_WEBHOOK_URL?wait=true&with_components=true"
+  # Send to Discord webhook with components V2 enabled (the URL may have a query already, e.g. ?thread_id=...)
+  case "$DISCORD_WEBHOOK_URL" in
+    *\?*) sep='&' ;;
+    *) sep='?' ;;
+  esac
+  webhook_url="$DISCORD_WEBHOOK_URL${sep}wait=true&with_components=true"
   _secure_debug "webhook_url" "$webhook_url"
 
   if ! response="$(_post "$payload" "$webhook_url" "" "POST" "application/json")"; then
@@ -174,6 +179,6 @@ EOF
     2[0-9][0-9]) return 0 ;;
   esac
   _err "Failed to send Discord notification, HTTP status: $status_code"
-  _err "$response"
+  [ -z "$response" ] || _err "$response"
   return 1
 }

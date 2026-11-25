@@ -13,6 +13,25 @@ PRUNE_DANGLING='false'
 # Update containers in docker compose stacks
 UPDATE_COMPOSE='false'
 
+# Docker Compose: what to recreate after pulling the new image of a service
+#   'service' (default): only that service ('up --no-deps --force-recreate <service>'), its depends_on services are left alone
+#   'stack': every service of the project ('up --force-recreate'), all of them started when the updated container was
+#            running (or START_STOPPED='true'); the other containers of the project are recreated too, so with several
+#            pending updates in one project dciu updates one per run
+COMPOSE_RECREATE='service'
+# Rebuild services that have a build: section when recreating them ('up --build'): 'false' (default) or 'true'
+# COMPOSE_RECREATE='stack' with COMPOSE_BUILD='true' is the behaviour before dciu.sh 2.4.0
+COMPOSE_BUILD='false'
+
+# A registry can re-publish a tag (new index digest) without changing the image for this platform, e.g. a multi-arch
+# image where only another platform was rebuilt or attestations were added.
+#   '1' (default): after the pull dciu compares the pulled image with the running one (same layers and config =
+#                  identical) and leaves the container alone (update_skipped); later checks treat it as up to date.
+#                  Monitor mode never pulls, so it keeps reporting such a re-publish until the image is pulled.
+#   '0': every pull is followed by a recreate (Watchtower's behaviour)
+# 'true'/'false' work as well
+SKIP_IDENTICAL_IMAGES='1'
+
 # Labels for selecting containers
 LABEL_MODE='dciu.mode'
 # Labels to override stopped containers behavior
@@ -22,6 +41,11 @@ LABEL_START_STOPPED='dciu.start-stopped'
 LABEL_PRUNE_DANGLING='dciu.prune-dangling'
 # Label to override update container in docker compose stacks behavior per container
 LABEL_UPDATE_COMPOSE='dciu.update-compose'
+# Labels to override COMPOSE_RECREATE and COMPOSE_BUILD per container (for a whole stack: set them on each of its services)
+LABEL_COMPOSE_RECREATE='dciu.compose-recreate'
+LABEL_COMPOSE_BUILD='dciu.compose-build'
+# Label to override SKIP_IDENTICAL_IMAGES per container (for a whole stack: set it on each of its services)
+LABEL_SKIP_IDENTICAL_IMAGES='dciu.skip-identical-images'
 # Label to tell dciu that container image in private repository
 # NOTE: For images in Docker Hub's private repositories supported only those that use pure Manifest V2 format
 # (e.g. "application/vnd.docker.distribution.manifest.v2+json")
@@ -35,10 +59,11 @@ LABEL_PRIVATE_REPO='dciu.private-repo'
 # Notify module name (script in notify/ directory)
 NOTIFY_MODULE='discord,telegram'
 # Notify events: comma- or space-separated list of events to notify on (e.g. 'update_available,updated', 'all' or 'none')
-# Available events: update_available, updated, update_failed, update_skipped
+# Available events: update_available, updated, update_failed, update_skipped, check_failed
+# (check_failed: the update check itself failed, e.g. registry unreachable, unknown tag or an image without registry digest)
 # all: notify on all events
 # none: do not notify on any event
-NOTIFY_EVENT='update_available,updated,update_failed'
+NOTIFY_EVENT='update_available,updated,update_failed,check_failed'
 
 # Source of the notification (e.g. 'myserver', 'myserver.local', 'myserver.example.com')
 #NOTIFY_SOURCE='myserver'

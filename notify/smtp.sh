@@ -54,14 +54,14 @@ smtp_send() {
   # Strip CR and NL from text to prevent MIME header injection
   # text
   _clean_email_header() {
-    printf "%s" "$(echo "$1" | tr -d "\r\n")"
+    printf "%s" "$1" | tr -d "\r\n"
   }
 
   # Simple check for display name in an email address (< > or ")
   # email
   _email_has_display_name() {
     _email="$1"
-    echo "$_email" | grep -q -E '^.*[<>"]'
+    printf "%s\n" "$_email" | grep -q -E '^.*[<>"]'
   }
 
   # validate required configs
@@ -141,8 +141,8 @@ smtp_send() {
     cat << EOF
 Container: $container
 Image: $image
-Old Digest: $old_digest
-New Digest: $new_digest
+Old Digest: ${old_digest:-unknown}
+New Digest: ${new_digest:-unknown}
 Running: $running
 Mode: $mode
 Message: $message
@@ -164,7 +164,7 @@ EOF
     _text="$1"
     # (regex character ranges like [a-z] can be locale-dependent; enumerate ASCII chars to avoid that)
     _ascii='] $`"'"[!#%&'()*+,./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ~^_abcdefghijklmnopqrstuvwxyz{|}~-"
-    if echo "$_text" | grep -q -E "^.*[^$_ascii]"; then
+    if printf "%s\n" "$_text" | grep -q -E "^.*[^$_ascii]"; then
       # At least one non-ASCII char; convert entire thing to encoded word
       printf "%s" "=?UTF-8?B?$(printf "%s" "$_text" | _base64)?="
     else
@@ -191,14 +191,14 @@ EOF
   # (This assumes variables have already been cleaned for use in email headers.)
   # shellcheck disable=SC2317,SC2329
   _smtp_raw_message() {
-    echo "From: $SMTP_FROM"
-    echo "To: $SMTP_TO"
-    echo "Subject: $(_mime_encoded_word "$SMTP_SUBJECT")"
-    echo "Date: $(_rfc2822_date)"
-    echo "Content-Type: text/plain; charset=utf-8"
-    echo "X-Mailer: $SMTP_X_MAILER"
-    echo
-    echo "$SMTP_CONTENT"
+    printf "%s\n" "From: $SMTP_FROM"
+    printf "%s\n" "To: $SMTP_TO"
+    printf "%s\n" "Subject: $(_mime_encoded_word "$SMTP_SUBJECT")"
+    printf "%s\n" "Date: $(_rfc2822_date)"
+    printf "%s\n" "Content-Type: text/plain; charset=utf-8"
+    printf "%s\n" "X-Mailer: $SMTP_X_MAILER"
+    printf "\n"
+    printf "%s\n" "$SMTP_CONTENT"
   }
 
   # Send the message via curl using SMTP_* variables
@@ -254,7 +254,7 @@ EOF
     _secure_debug2 "curl args" "$*"
     _debug3 "raw_message" "$raw_message"
 
-    echo "$raw_message" | "$SMTP_BIN" "$@"
+    printf "%s\n" "$raw_message" | "$SMTP_BIN" "$@"
   }
 
   ##

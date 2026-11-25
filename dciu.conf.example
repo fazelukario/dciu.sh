@@ -4,6 +4,11 @@
 # An invalid value in this file is reported once per run, its default is used and the run ends with exit code 1.
 # Most settings can be set per container with a label (LABEL_* below), which overrides this file; an invalid label
 # value fails that container's update check (check_failed) and dciu leaves the container alone.
+#
+# Exit code: 0, or 1 when a container's check or update failed, a setting or label was invalid, docker ps failed or
+# another run holds the lock (LOCK_FILE). Skipped containers and failed notifications don't count.
+# Containers whose image is pinned to a digest (image@sha256:...) or given as an image ID are skipped: there is no
+# newer image for them.
 
 # Default Mode: autoupdate, monitor or none
 MODE='monitor'

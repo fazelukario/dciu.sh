@@ -13,7 +13,7 @@
 # - (Probably in far future) Add syslog support (SYS_LOG with syslog levels, like acme.sh)
 # - (Probably in future) Add colored output (like acme.sh's __red/__green)
 
-VER=2.4.0
+VER=2.5.0
 
 PROJECT_NAME="dciu.sh"
 

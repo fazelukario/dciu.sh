@@ -729,6 +729,7 @@ _read_container() {
 {{index .Config.Labels \"com.docker.compose.project.config_files\"}}
 {{index .Config.Labels \"com.docker.compose.project.working_dir\"}}
 {{index .Config.Labels \"com.docker.compose.project.environment_file\"}}
+{{index .Config.Labels \"com.docker.compose.oneoff\"}}
 {{index .Config.Labels \"$LABEL_COMPOSE_RECREATE\"}}
 {{index .Config.Labels \"$LABEL_COMPOSE_BUILD\"}}
 {{index .Config.Labels \"$LABEL_SKIP_IDENTICAL_IMAGES\"}}
@@ -753,6 +754,7 @@ dciu-inspect-end"
     IFS= read -r compose_file
     IFS= read -r compose_working_dir
     IFS= read -r compose_env_files
+    IFS= read -r compose_oneoff
     IFS= read -r _rc_compose_recreate
     IFS= read -r _rc_compose_build
     IFS= read -r _rc_skip_identical
@@ -899,6 +901,13 @@ _update_compose_service() {
     return 0
   fi
 
+  # a 'docker compose run' container carries its service's labels, but 'up' recreates only the service's own
+  # containers: for a one-off it would restart the service on every run, or replace it with a stopped container
+  if [ "$compose_oneoff" = "True" ]; then
+    _update_skipped "Skipping container $name ($img) [Service \"$compose_service\"] in Docker Compose project $compose_project ($compose_file): one-off container (docker compose run), not recreated by docker compose up"
+    return 0
+  fi
+
   # Check if compose file exists
   if [ -z "$compose_file" ]; then
     _update_failed "Docker Compose file not found for container $name ($img)"
@@ -933,6 +942,12 @@ _update_compose_service() {
   _ucs_start=""
   if [ "$running" = "true" ] || [ "$start_stopped" = "true" ]; then
     _ucs_start=1
+  elif [ "$compose_recreate" != "stack" ] && [ -n "$(docker ps -q --filter "label=com.docker.compose.project=$compose_project" --filter "label=com.docker.compose.service=$compose_service" --filter "label=com.docker.compose.oneoff=False" --filter status=running 2> /dev/null)" ]; then
+    # up recreates every container of the service: with another one running (a scaled service), --no-start would
+    # stop the service
+    _ucs_start=1
+  fi
+  if [ -n "$_ucs_start" ]; then
     set -- up -d
   else
     set -- up --no-start
@@ -953,6 +968,12 @@ _update_compose_service() {
 
   if ! _compose "$@"; then
     _update_failed "Error recreating container $_ucs_ctr"
+    return 1
+  fi
+  # up replaces the containers it recreates (new IDs); this one is still there when up left it out
+  # (e.g. COMPOSE_RECREATE=stack and its service is in a Compose profile that isn't enabled)
+  if [ -n "$(docker ps -aq --filter "id=$cid" 2> /dev/null)" ]; then
+    _update_failed "Error recreating container $_ucs_ctr: docker compose up did not replace it"
     return 1
   fi
   if [ -n "$_ucs_start" ]; then

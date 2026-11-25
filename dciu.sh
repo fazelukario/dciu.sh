@@ -898,6 +898,28 @@ process_container() {
     return 0
   fi
 
+  # Skip pinned images: there is no newer image for a digest or an image ID
+  case "$img" in
+    *@*)
+      _info "Skipping container $name ($img): the image is pinned to a digest"
+      return 0
+      ;;
+    sha256:*)
+      _info "Skipping container $name ($img): the container was created from an image ID"
+      return 0
+      ;;
+    '' | *[!0-9a-f]*) ;;
+    *)
+      # all hex: a (short) image ID when it starts the container's image ID, else a repository name
+      case "${image_id#sha256:}" in
+        "$img"*)
+          _info "Skipping container $name ($img): the container was created from an image ID"
+          return 0
+          ;;
+      esac
+      ;;
+  esac
+
   parse_image "$img"
 
   # Check for update

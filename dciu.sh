@@ -863,6 +863,12 @@ _update_cmd_script() {
   _finish_update "$msg"
 }
 
+# cid: 0 when the container exists (also when docker ps itself fails), 1 when it is gone
+_container_exists() {
+  _ce_ids="$(docker ps -aq --filter "id=$1" 2> /dev/null)" || return 0
+  [ -n "$_ce_ids" ]
+}
+
 # Check container cid for an update and handle it as its mode says.
 # Returns 0, or 1 when the container can't be read or its update failed.
 process_container() {
@@ -876,6 +882,11 @@ process_container() {
       return 1
       ;;
     *)
+      # removed since docker ps listed it (e.g. by a compose recreate earlier in this run, or a --rm container)
+      if ! _container_exists "$cid"; then
+        _info "Container $cid no longer exists, skipping"
+        return 0
+      fi
       _err "Cannot inspect container $cid"
       return 1
       ;;
@@ -956,13 +967,21 @@ main() {
   trap 'exit 143' TERM
 
   # Get all containers
-  cids="$(docker ps -q -a)"
+  if ! cids="$(docker ps -q -a)"; then
+    _err "Cannot list containers"
+    return 1
+  fi
   _init_image_store
+
+  # like acme.sh's cron: 1 when any container's check or update failed (skips and failed notifications don't count)
+  _main_ret=0
   for cid in $cids; do
-    (process_container "$cid")
+    if ! (process_container "$cid"); then
+      _main_ret=1
+    fi
   done
   _info "All containers processed."
-  return 0
+  return "$_main_ret"
 }
 
 main

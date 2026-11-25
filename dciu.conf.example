@@ -68,14 +68,14 @@ LABEL_COMPOSE_BUILD='dciu.compose-build'
 LABEL_SKIP_IDENTICAL_IMAGES='dciu.skip-identical-images'
 # Label to override SKIP_LOCAL_IMAGES per container
 LABEL_SKIP_LOCAL_IMAGES='dciu.skip-local-images'
-# Label to tell dciu that container image in private repository
-# NOTE: For images in Docker Hub's private repositories supported only those that use pure Manifest V2 format
-# (e.g. "application/vnd.docker.distribution.manifest.v2+json")
-# You can check if image supported by running the following command on the latest image and comparing the output:
-# 1: docker inspect --format '{{index .RepoDigests 0}}' "$img" 2> /dev/null | awk -F'@' '{print $2}' | awk -F':' '{print $2}'
-# 2: printf "%s" "$(docker manifest inspect "$img" 2> /dev/null)" | sha256sum | awk '{print substr($1, 1, 64)}'
-# If the output of the commands is equal, then the image is supported by dciu
-# ghcr.io private repositories are supported if you provide a GitHub token with read:packages scope
+# Label to override PRIVATE_REPO per container (the image is in a private repository)
+# Docker Hub private repositories and registries other than Docker Hub and ghcr.io are looked up with
+# 'docker manifest inspect', using the credentials of 'docker login'. A single-platform image is compared exactly; a
+# multi-platform image only when its list was pushed with 'docker manifest push', otherwise it shows an update on every
+# run (support for these registries is a TODO). Registries the Docker daemon treats as insecure (localhost,
+# 127.0.0.0/8, ::1 and its insecure-registries listed by name) are contacted with --insecure; one that is insecure
+# only through a CIDR in insecure-registries isn't detected: list it there by name.
+# ghcr.io private repositories need GITHUB_TOKEN (read:packages scope)
 LABEL_PRIVATE_REPO='dciu.private-repo'
 
 # Notify module name (script in notify/ directory)

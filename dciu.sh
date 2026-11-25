@@ -574,41 +574,57 @@ notify_event() {
   return $_send_err
 }
 
-# Parse image information
+# Parse an image name the way Docker does (distribution/reference): the part before the first '/' is a registry when
+# the name has a '/' and that part contains a '.' or a ':', is 'localhost' or has an uppercase letter; otherwise the
+# image is on Docker Hub, where docker.io, index.docker.io and registry-1.docker.io lead too (a single name gets
+# library/). Sets IMAGE_REGISTRY (hub.docker.com for Docker Hub), IMAGE_REGISTRY_API, IMAGE_PATH_FULL (path with
+# tag), IMAGE_PATH, IMAGE_NAMESPACE (first path component), IMAGE_REPOSITORY (second), IMAGE_TAG (latest when none)
+# and IMAGE_REGISTRY_URL
 parse_image() {
-  _img_to_parse="$1"
-
-  # Parse image registry information
-  # check if first part of image name contains a dot, then it's a registry domain and not from hub.docker.com
-  if printf '%s' "$_img_to_parse" | awk -F':' '{print $1}' | awk -F'/' '{print $1}' | grep -q '\.'; then
-    IMAGE_REGISTRY=$(echo "$_img_to_parse" | awk -F'/' '{print $1}')
-    IMAGE_REGISTRY_API=$IMAGE_REGISTRY
-    IMAGE_PATH_FULL=$(echo "$_img_to_parse" | cut -d '/' -f '2-') # consider posibility of moving to awk in the future
-    IMAGE_NAMESPACE=$(echo "$IMAGE_PATH_FULL" | awk -F'/' '{print $1}')
-  elif [ "$(echo "$_img_to_parse" | awk -F'/' '{print NF-1}')" = 0 ]; then
-    IMAGE_REGISTRY="hub.docker.com"
-    IMAGE_REGISTRY_API="hub.docker.com"
-    IMAGE_PATH_FULL="library/$_img_to_parse"
-    IMAGE_NAMESPACE="library"
-  else
-    IMAGE_REGISTRY="hub.docker.com"
-    IMAGE_REGISTRY_API="hub.docker.com"
-    IMAGE_PATH_FULL="$_img_to_parse"
-    IMAGE_NAMESPACE=$(echo "$IMAGE_PATH_FULL" | awk -F'/' '{print $1}')
+  _pi_name="$1"
+  _pi_first="${_pi_name%%/*}"
+  _pi_path="$_pi_name"
+  IMAGE_REGISTRY="hub.docker.com"
+  if [ "$_pi_first" != "$_pi_name" ]; then
+    case "$_pi_first" in
+      *.* | *:* | localhost | *[[:upper:]]*)
+        IMAGE_REGISTRY="$_pi_first"
+        _pi_path="${_pi_name#*/}"
+        ;;
+    esac
   fi
-
-  # parse image information
-  if printf '%s' "$IMAGE_PATH_FULL" | grep -q ':'; then
-    IMAGE_PATH=$(echo "$IMAGE_PATH_FULL" | awk -F':' '{print $1}')
-    IMAGE_REPOSITORY=$(echo "$IMAGE_PATH" | awk -F'/' '{print $2}')
-    IMAGE_TAG=$(echo "$IMAGE_PATH_FULL" | awk -F':' '{print $2}')
-    #IMAGE_LOCAL="$_img_to_parse" # currently not used
-  else
-    IMAGE_PATH="$IMAGE_PATH_FULL"
-    IMAGE_REPOSITORY=$(echo "$IMAGE_PATH" | awk -F'/' '{print $2}')
-    IMAGE_TAG="latest"
-    #IMAGE_LOCAL="$_img_to_parse:latest" # currently not used
+  case "$IMAGE_REGISTRY" in
+    docker.io | index.docker.io | registry-1.docker.io) IMAGE_REGISTRY="hub.docker.com" ;;
+  esac
+  if [ "$IMAGE_REGISTRY" = "hub.docker.com" ]; then
+    case "$_pi_path" in
+      */*) ;;
+      *) _pi_path="library/$_pi_path" ;;
+    esac
   fi
+  IMAGE_REGISTRY_API="$IMAGE_REGISTRY"
+  # shellcheck disable=SC2034 # kept for notify modules, like IMAGE_REGISTRY_URL
+  IMAGE_PATH_FULL="$_pi_path"
+
+  # the tag follows the last ':' of the last component (a registry port is gone with the registry)
+  case "${_pi_path##*/}" in
+    *:*)
+      IMAGE_TAG="${_pi_path##*:}"
+      IMAGE_PATH="${_pi_path%:*}"
+      ;;
+    *)
+      IMAGE_TAG="latest"
+      IMAGE_PATH="$_pi_path"
+      ;;
+  esac
+  IMAGE_NAMESPACE="${IMAGE_PATH%%/*}"
+  IMAGE_REPOSITORY=""
+  case "$IMAGE_PATH" in
+    */*)
+      IMAGE_REPOSITORY="${IMAGE_PATH#*/}"
+      IMAGE_REPOSITORY="${IMAGE_REPOSITORY%%/*}"
+      ;;
+  esac
 
   # build registry URL for the image
   # shellcheck disable=SC2034
@@ -628,13 +644,30 @@ parse_image() {
 # (graph drivers) it is the digest of the image config. Unknown counts as classic.
 # On the containerd store also IMAGE_IDENTITY=1 when images show their pull record (Identity, Engine API 1.53): a CLI
 # speaking an older API (an older daemon, a pinned DOCKER_API_VERSION) shows none for every image, pulled ones too.
+# The same docker info call gives INSECURE_REGISTRIES: the registries the daemon lists as not secure (by name).
 _init_image_store() {
   IMAGE_STORE="classic"
   IMAGE_IDENTITY=""
-  case "$(docker info --format '{{json .DriverStatus}}' 2> /dev/null)" in
+  INSECURE_REGISTRIES=""
+  # line 1: the storage driver, line 2: the insecure registries
+  if ! _iis_info="$(docker info --format '{{json .DriverStatus}}
+{{range .RegistryConfig.IndexConfigs}}{{if not .Secure}}{{.Name}} {{end}}{{end}}' 2> /dev/null)"; then
+    _iis_info=""
+    _debug "Cannot read docker info, assuming the classic image store"
+  fi
+  _iis_driver="" _iis_insecure=""
+  {
+    IFS= read -r _iis_driver
+    IFS= read -r _iis_insecure
+  } << EOF
+$_iis_info
+EOF
+  case "$_iis_driver" in
     *io.containerd.snapshotter*) IMAGE_STORE="containerd" ;;
   esac
+  INSECURE_REGISTRIES="${_iis_insecure%"${_iis_insecure##*[![:space:]]}"}"
   _debug "IMAGE_STORE" "$IMAGE_STORE"
+  _debug "INSECURE_REGISTRIES" "$INSECURE_REGISTRIES"
   if [ "$IMAGE_STORE" != "containerd" ]; then
     return 0
   fi
@@ -852,14 +885,48 @@ _get_ghcr_digest() {
   fi
 }
 
-# other registries: the hash of `docker manifest inspect img` (it contacts the registry); matches the local digest
-# only for images with a plain manifest v2
+# registry: 0 when the Docker daemon treats it as insecure (plain HTTP, no TLS verification): localhost, 127.0.0.0/8
+# and ::1 (its default CIDRs) and the registries docker info lists as not secure
+_registry_insecure() {
+  case "$1" in
+    localhost | localhost:* | 127.* | "[::1]" | "[::1]:"*) return 0 ;;
+  esac
+  case " $INSECURE_REGISTRIES " in
+    *" $1 "*) return 0 ;;
+  esac
+  return 1
+}
+
+# other registries (and Docker Hub with private_repo): `docker manifest inspect` contacts the registry with the
+# credentials of docker login (--insecure for the registries the daemon treats as insecure). With -v it shows the exact
+# digest of a single-platform manifest (its Descriptor, the first "digest"); for a list it shows the platforms but not
+# the list's digest, so the plain output is hashed (right only for lists pushed by 'docker manifest push')
 _get_manifest_digest() {
-  if ! _gmd_manifest="$(docker manifest inspect "$1" 2> /dev/null)" || [ -z "$_gmd_manifest" ]; then
+  _gmd_img="$1"
+  set --
+  if _registry_insecure "$IMAGE_REGISTRY"; then
+    set -- --insecure
+  fi
+  _gmd_out="$(docker manifest inspect -v "$@" "$_gmd_img" 2> /dev/null)" || _gmd_out=""
+  case "$_gmd_out" in
+    "{"*)
+      remote_digest="$(printf '%s\n' "$_gmd_out" | awk 'match($0, /"digest": *"sha256:[0-9a-f]+"/) {
+        d = substr($0, RSTART, RLENGTH); sub(/^.*sha256:/, "", d); sub(/"$/, "", d); print d; exit }')"
+      ;;
+    "["*)
+      if _gmd_out="$(docker manifest inspect "$@" "$_gmd_img" 2> /dev/null)" && [ -n "$_gmd_out" ]; then
+        remote_digest="$(printf "%s" "$_gmd_out" | sha256sum | awk '{print substr($1, 1, 64)}')"
+      fi
+      ;;
+  esac
+  case "$remote_digest" in
+    *[!0-9a-f]*) remote_digest="" ;;
+  esac
+  if [ "${#remote_digest}" != 64 ]; then
+    remote_digest=""
     check_error="docker manifest inspect failed"
     return 1
   fi
-  remote_digest="$(printf "%s" "$_gmd_manifest" | sha256sum | awk '{print substr($1, 1, 64)}')"
 }
 
 # Check if an update is available for $img, run by the container's image $image_id: sets old_digest (the first

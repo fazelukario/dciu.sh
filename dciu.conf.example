@@ -53,8 +53,19 @@ NOTIFY_EVENT='update_available,updated,update_failed'
 # Log file path
 LOG_FILE="$SCRIPT_DIR/dciu.sh.log"
 
-# Debug mode: if set to '1', dciu will run in debug mode
+# Debug level (debug output goes to stderr):
+# 0: off (default)
+# 1: what dciu does and the key values (resolved labels, digests, notify module, HTTP status)
+# 2: level 1 + notification payloads, API responses and the SMTP transcript (may include SMTP_PASSWORD!)
+# 3: everything
 #DEBUG='0'
+
+# Which debug levels are also written to LOG_FILE (0-3); defaults to DEBUG
+#LOG_LEVEL=''
+
+# Secrets (tokens, webhook URLs, passwords) are shown as [hidden] in debug output and LOG_FILE.
+# Set to '1' to show them in clear text - careful, they will end up in LOG_FILE too
+#OUTPUT_INSECURE='0'
 
 # NO_TIMESTAMP: if set to '1', dciu will not add timestamps to log messages
 #NO_TIMESTAMP='0'

@@ -23,21 +23,20 @@ PROJECT_NAME="dciu.sh"
 
 PROJECT="https://github.com/fazelukario/$PROJECT_NAME"
 
-# Load configuration
-SCRIPT_DIR="$(dirname "$(realpath "$0")")"
-CONFIG_FILE="$SCRIPT_DIR/dciu.conf"
-if [ ! -f "$CONFIG_FILE" ]; then
-  echo "Config file not found: $CONFIG_FILE" >&2
-  exit 1
-fi
-# shellcheck source=dciu.conf
-. "$CONFIG_FILE"
+DEBUG_LEVEL_NONE=0
+DEBUG_LEVEL_1=1
+DEBUG_LEVEL_2=2
+DEBUG_LEVEL_3=3
 
-if [ -z "$LOG_FILE" ]; then LOG_FILE="$SCRIPT_DIR/dciu.sh.log"; fi
+LOG_LEVEL_1=1
+LOG_LEVEL_2=2
+LOG_LEVEL_3=3
 
-if [ -z "$DEBUG" ]; then DEBUG='0'; fi
+HIDDEN_VALUE="[hidden](set OUTPUT_INSECURE=1 to see this value)"
 
-if [ -z "$NOTIFY_SOURCE" ]; then NOTIFY_SOURCE="$(hostname -f)"; fi
+# Logging: _info -> stdout, _err and _debug* -> stderr; all of them also go to LOG_FILE
+# (debug lines only up to LOG_LEVEL, which defaults to DEBUG).
+# Except for _err (always returns 1), the helpers return the caller's $? untouched.
 
 _printargs() {
   _exitstatus="$?"
@@ -55,13 +54,18 @@ _printargs() {
 }
 
 _log() {
-  [ -z "$LOG_FILE" ] && return
-  _printargs "$@" >> "$LOG_FILE"
+  __log_ret="$?"
+  if [ -n "$LOG_FILE" ]; then
+    _printargs "$@" >> "$LOG_FILE"
+  fi
+  return "$__log_ret"
 }
 
 _info() {
+  __info_ret="$?"
   _log "$@"
   _printargs "$@"
+  return "$__info_ret"
 }
 
 _err() {
@@ -70,12 +74,70 @@ _err() {
   return 1
 }
 
-_debug() {
-  if [ "${DEBUG:-0}" -ge 1 ]; then
+# status debug_level log_level msg [value]
+# The _debug* wrappers pass their caller's $? as status, so nested helpers never share a saved value.
+__debugn() {
+  __debugn_ret="$1"
+  __debugn_debug_level="$2"
+  __debugn_log_level="$3"
+  shift 3
+  if [ "${LOG_LEVEL:-${DEBUG:-$DEBUG_LEVEL_NONE}}" -ge "$__debugn_log_level" ]; then
     _log "$@"
-    _printargs "$@"
+  fi
+  if [ "${DEBUG:-$DEBUG_LEVEL_NONE}" -ge "$__debugn_debug_level" ]; then
+    _printargs "$@" >&2
+  fi
+  return "$__debugn_ret"
+}
+
+_debug() { __debugn "$?" "$DEBUG_LEVEL_1" "$LOG_LEVEL_1" "$@"; }
+_debug2() { __debugn "$?" "$DEBUG_LEVEL_2" "$LOG_LEVEL_2" "$@"; }
+_debug3() { __debugn "$?" "$DEBUG_LEVEL_3" "$LOG_LEVEL_3" "$@"; }
+
+# status debug_level log_level name value: like __debugn, but the value is hidden unless OUTPUT_INSECURE=1
+__secure_debugn() {
+  if [ "$OUTPUT_INSECURE" = "1" ]; then
+    __debugn "$@"
+  else
+    __debugn "$1" "$2" "$3" "$4" "$HIDDEN_VALUE"
   fi
 }
+
+_secure_debug() { __secure_debugn "$?" "$DEBUG_LEVEL_1" "$LOG_LEVEL_1" "$@"; }
+_secure_debug2() { __secure_debugn "$?" "$DEBUG_LEVEL_2" "$LOG_LEVEL_2" "$@"; }
+_secure_debug3() { __secure_debugn "$?" "$DEBUG_LEVEL_3" "$LOG_LEVEL_3" "$@"; }
+
+# DEBUG and LOG_LEVEL must be non-negative integers; anything else is reported and treated as 0
+_init_log_levels() {
+  case "$DEBUG" in
+    '' | *[!0-9]*)
+      [ -z "$DEBUG" ] || _err "Invalid DEBUG='$DEBUG' (must be a number 0-3), using 0"
+      DEBUG="$DEBUG_LEVEL_NONE"
+      ;;
+  esac
+  case "$LOG_LEVEL" in
+    *[!0-9]*)
+      _err "Invalid LOG_LEVEL='$LOG_LEVEL' (must be a number 0-3), using 0"
+      LOG_LEVEL=0
+      ;;
+  esac
+}
+
+# Load configuration
+SCRIPT_DIR="$(dirname "$(realpath "$0")")"
+CONFIG_FILE="$SCRIPT_DIR/dciu.conf"
+if [ ! -f "$CONFIG_FILE" ]; then
+  _err "Config file not found: $CONFIG_FILE"
+  exit 1
+fi
+# shellcheck source=dciu.conf
+. "$CONFIG_FILE"
+
+if [ -z "$LOG_FILE" ]; then LOG_FILE="$SCRIPT_DIR/dciu.sh.log"; fi
+
+if [ -z "$DEBUG" ]; then DEBUG='0'; fi
+
+if [ -z "$NOTIFY_SOURCE" ]; then NOTIFY_SOURCE="$(hostname -f)"; fi
 
 # Logging helper
 echo_log() {
@@ -90,14 +152,15 @@ _exists() {
   if [ -z "$cmd" ]; then return 1; fi
 
   if eval type type > /dev/null 2>&1; then
-    eval type "$cmd" > /dev/null 2>&1
+    # quoted for eval: the name must not be parsed as shell code
+    eval 'type "$cmd"' > /dev/null 2>&1
   elif command > /dev/null 2>&1; then
     command -v "$cmd" > /dev/null 2>&1
   else
     which "$cmd" > /dev/null 2>&1
   fi
   ret="$?"
-  _debug "$cmd exists=$ret"
+  _debug3 "$cmd exists=$ret"
   return $ret
 }
 
@@ -568,6 +631,8 @@ process_container() {
 
 # Iterate containers by label and mode
 main() {
+  _init_log_levels
+
   # Get all containers
   cids="$(docker ps -q -a)"
   for cid in $cids; do

@@ -103,6 +103,8 @@ EOF
     return 1
   fi
   status_code="$(_http_status)"
+  # an error page may echo the request URL, which carries the bot token
+  response="$(_hide_secret "$response" "$TELEGRAM_BOT_APITOKEN")"
   _debug "status_code" "$status_code"
   _debug2 "response" "$response"
 

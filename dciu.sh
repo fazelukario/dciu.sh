@@ -107,6 +107,29 @@ _secure_debug() { __secure_debugn "$?" "$DEBUG_LEVEL_1" "$LOG_LEVEL_1" "$@"; }
 _secure_debug2() { __secure_debugn "$?" "$DEBUG_LEVEL_2" "$LOG_LEVEL_2" "$@"; }
 _secure_debug3() { __secure_debugn "$?" "$DEBUG_LEVEL_3" "$LOG_LEVEL_3" "$@"; }
 
+# text secret: print text with every occurrence of secret replaced by [hidden] (as is with OUTPUT_INSECURE=1)
+# e.g. for API error pages that echo the request URL, which carries a token
+_hide_secret() {
+  __hs_text="$1"
+  __hs_secret="$2"
+  if [ -z "$__hs_secret" ] || [ "$OUTPUT_INSECURE" = "1" ]; then
+    printf "%s" "$__hs_text"
+    return
+  fi
+  __hs_out=""
+  # the quoted secret is matched literally, glob characters included
+  while :; do
+    case "$__hs_text" in
+      *"$__hs_secret"*)
+        __hs_out="$__hs_out${__hs_text%%"$__hs_secret"*}[hidden]"
+        __hs_text="${__hs_text#*"$__hs_secret"}"
+        ;;
+      *) break ;;
+    esac
+  done
+  printf "%s" "$__hs_out$__hs_text"
+}
+
 # DEBUG and LOG_LEVEL must be non-negative integers; anything else is reported and treated as 0
 _init_log_levels() {
   case "$DEBUG" in

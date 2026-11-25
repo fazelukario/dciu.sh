@@ -156,8 +156,12 @@ EOF
 
   _debug2 "payload" "$payload"
 
-  # Send to Discord webhook with components V2 enabled
-  webhook_url="$DISCORD_WEBHOOK_URL?wait=true&with_components=true"
+  # Send to Discord webhook with components V2 enabled (the URL may have a query already, e.g. ?thread_id=...)
+  case "$DISCORD_WEBHOOK_URL" in
+    *\?*) sep='&' ;;
+    *) sep='?' ;;
+  esac
+  webhook_url="$DISCORD_WEBHOOK_URL${sep}wait=true&with_components=true"
   _secure_debug "webhook_url" "$webhook_url"
 
   if ! response="$(_post "$payload" "$webhook_url" "" "POST" "application/json")"; then

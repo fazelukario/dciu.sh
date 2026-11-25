@@ -35,10 +35,11 @@ LABEL_PRIVATE_REPO='dciu.private-repo'
 # Notify module name (script in notify/ directory)
 NOTIFY_MODULE='discord,telegram'
 # Notify events: comma- or space-separated list of events to notify on (e.g. 'update_available,updated', 'all' or 'none')
-# Available events: update_available, updated, update_failed, update_skipped
+# Available events: update_available, updated, update_failed, update_skipped, check_failed
+# (check_failed: the update check itself failed, e.g. registry unreachable, unknown tag or an image without registry digest)
 # all: notify on all events
 # none: do not notify on any event
-NOTIFY_EVENT='update_available,updated,update_failed'
+NOTIFY_EVENT='update_available,updated,update_failed,check_failed'
 
 # Source of the notification (e.g. 'myserver', 'myserver.local', 'myserver.example.com')
 #NOTIFY_SOURCE='myserver'

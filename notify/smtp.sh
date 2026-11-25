@@ -141,8 +141,8 @@ smtp_send() {
     cat << EOF
 Container: $container
 Image: $image
-Old Digest: $old_digest
-New Digest: $new_digest
+Old Digest: ${old_digest:-unknown}
+New Digest: ${new_digest:-unknown}
 Running: $running
 Mode: $mode
 Message: $message

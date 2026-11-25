@@ -31,6 +31,7 @@ discord_send() {
     updated) color=65280 ;;             # green
     update_failed) color=16711680 ;;    # red
     update_skipped) color=8421504 ;;    # grey
+    check_failed) color=16753920 ;;     # orange
     *) color=0 ;;                       # default
   esac
 
@@ -41,8 +42,8 @@ discord_send() {
   evt=$(_escape_json "$event")
   cn=$(_escape_json "$container")
   img=$(_escape_json "$image")
-  od=$(_escape_json "$old_digest")
-  nd=$(_escape_json "$new_digest")
+  od=$(_escape_json "${old_digest:-unknown}")
+  nd=$(_escape_json "${new_digest:-unknown}")
   rn=$(_escape_json "$running")
   md=$(_escape_json "$mode")
   msg=$(_escape_json "$message")

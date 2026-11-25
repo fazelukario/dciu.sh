@@ -187,6 +187,29 @@ _exists() {
 # function to escape JSON strings
 _escape_json() { printf "%s" "$1" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;s/\n/\\n/g;ta'; }
 
+# [multiline]: base64-encode stdin (acme.sh's signature); without multiline the output is a single line
+# shellcheck disable=SC2120 # multiline is optional
+_base64() {
+  if [ -n "$1" ]; then
+    _debug3 "base64 multiline"
+    __base64_encode
+  else
+    _debug3 "base64 single line"
+    __base64_encode | tr -d '\r\n'
+  fi
+}
+
+__base64_encode() {
+  if _exists base64; then
+    base64
+  elif _exists openssl; then
+    openssl base64 -e
+  else
+    _err "Cannot encode base64: neither base64 nor openssl found"
+    return 1
+  fi
+}
+
 # print the path of a new temp file
 _mktemp() {
   if ! mktemp 2> /dev/null; then
@@ -195,7 +218,7 @@ _mktemp() {
   fi
 }
 
-# HTTP_HEADER: temp file that receives the response headers of _post (one per run, created in main)
+# HTTP_HEADER: temp file that receives the response headers of _post and _get (one per run, created in main)
 _inithttp() {
   if [ -z "$HTTP_HEADER" ] || ! touch "$HTTP_HEADER" 2> /dev/null; then
     HTTP_HEADER="$(_mktemp)" || return 1
@@ -243,7 +266,45 @@ _post() {
   return "$_ret"
 }
 
-# HTTP status code of the last _post response (the last status line, so 100 Continue / proxy CONNECT are skipped)
+# url [onlyheader] [timeout]  (acme.sh's signature; extra headers from _H1.._H5)
+# Prints the response body, or the response headers for onlyheader (also left in $response), and returns curl's
+# exit code. Redirects are followed; _http_status reads the status of the last response.
+_get() {
+  _get_url="$1"
+  _get_onlyheader="$2"
+  _get_timeout="$3"
+
+  _debug "GET"
+  _debug "_get_url" "$_get_url"
+  _debug2 "_get_timeout" "$_get_timeout"
+
+  if [ -z "$HTTP_HEADER" ]; then
+    _err "Cannot send GET request: no temp file for the response headers (HTTP_HEADER)"
+    return 1
+  fi
+
+  set -- --silent -L --dump-header "$HTTP_HEADER" --user-agent "$USER_AGENT"
+  if [ -n "$_get_timeout" ]; then
+    set -- "$@" --connect-timeout "$_get_timeout"
+  fi
+  if [ -n "$_get_onlyheader" ]; then
+    set -- "$@" -I
+  fi
+  # curl ignores the empty ones
+  set -- "$@" -H "$_H1" -H "$_H2" -H "$_H3" -H "$_H4" -H "$_H5"
+
+  response="$(curl "$@" "$_get_url")"
+  _ret="$?"
+  if [ "$_ret" != "0" ]; then
+    _err "Please refer to https://curl.haxx.se/libcurl/c/libcurl-errors.html for error code: $_ret"
+  fi
+  _debug "_ret" "$_ret"
+  printf "%s" "$response"
+  return "$_ret"
+}
+
+# HTTP status code of the last _post/_get response (the last status line, so 100 Continue, proxy CONNECT and
+# followed redirects are skipped)
 _http_status() {
   grep '^HTTP' "$HTTP_HEADER" 2> /dev/null | tail -n 1 | cut -d ' ' -f 2 | tr -d '\r\n'
 }
@@ -255,7 +316,7 @@ _cleanup() {
 
 # Notification helper: call notify modules if exists and event matches filter
 notify_event() {
-  event="$1" # e.g. update_available, updated, update_failed, update_skipped
+  event="$1" # e.g. update_available, updated, update_failed, update_skipped, check_failed
   container="$2"
   image="$3"
   old_digest="$4"
@@ -421,64 +482,153 @@ get_local_digests() {
   _add_image_digests "$1"
 }
 
-# Get remote image digest without pulling: img -> remote_digest (empty when not found)
+# Get the remote digest of img without pulling: sets remote_digest (hex) and returns 0, or sets check_error
+# (the reason, one line) and returns 1. Headers set for these requests are cleared before and after.
 get_remote_digest() {
   _grd_img="$1"
   remote_digest=""
+  check_error=""
 
+  _H1="" _H2="" _H3="" _H4="" _H5=""
   if [ "$IMAGE_REGISTRY" = "hub.docker.com" ] && [ "$PRIVATE_REPO" != "true" ]; then
-    # Get manifest digest from Docker Hub API
-    api="https://${IMAGE_REGISTRY_API}/v2/namespaces/${IMAGE_NAMESPACE}/repositories/${IMAGE_REPOSITORY}/tags/${IMAGE_TAG}"
-    _debug2 "api" "$api"
-    resp=$(curl -s "$api")
-    remote_digest=$(printf '%s' "$resp" | jq -r '.digest' | awk -F':' '{print $2}') # consider posibility of replacing jq with pure grep, awk and etc. in the future
+    _get_dockerhub_digest
   elif [ "$IMAGE_REGISTRY" = "ghcr.io" ]; then
-    # Token URL for GHCR
-    token_url="https://${IMAGE_REGISTRY_API}/token?scope=repository:${IMAGE_PATH}:pull"
-    _debug2 "token_url" "$token_url"
-    # Retrieve token: use basic auth if credentials provided
-    if [ -n "$GITHUB_TOKEN" ] || [ "$PRIVATE_REPO" = "true" ]; then
-      if [ -z "$GITHUB_TOKEN" ]; then
-        _err "GITHUB_TOKEN must be set for private repository access ($_grd_img)"
-        return 1
-      fi
-      token=$(curl -s -u "username:$GITHUB_TOKEN" "$token_url" | awk -F'"' 'NR==1{print $4}')
-    else
-      token=$(curl -s "$token_url" | awk -F'"' 'NR==1{print $4}')
-    fi
-    # Get digest from response header
-    header=$(curl -sI -H "Authorization: Bearer $token" -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-      "https://${IMAGE_REGISTRY_API}/v2/${IMAGE_PATH}/manifests/${IMAGE_TAG}")
-    remote_digest=$(printf '%s\n' "$header" | grep -i 'docker-content-digest' | awk '{print $2}' | tr -d '\r' | tr -d '\n' | awk -F':' '{print $2}')
+    _get_ghcr_digest
   else
-    # manifest inspect contacts registry to get manifest digest
-    # supported only those images that use pure Manifest V2 format
-    remote_digest="$(printf "%s" "$(docker manifest inspect "$_grd_img" 2> /dev/null)" | sha256sum | awk '{print substr($1, 1, 64)}')"
+    _get_manifest_digest "$_grd_img"
   fi
+  _grd_ret="$?"
+  _H1="" _H2="" _H3="" _H4="" _H5=""
+  return "$_grd_ret"
+}
+
+# Docker Hub tags API: the digest of the tag (its index, or its manifest for single-platform images)
+_get_dockerhub_digest() {
+  _gdd_body="$(_get "https://${IMAGE_REGISTRY_API}/v2/namespaces/${IMAGE_NAMESPACE}/repositories/${IMAGE_REPOSITORY}/tags/${IMAGE_TAG}")"
+  _gdd_ret="$?"
+  if [ "$_gdd_ret" != "0" ]; then
+    check_error="cannot reach the Docker Hub API (curl error $_gdd_ret)"
+    return 1
+  fi
+  _gdd_status="$(_http_status)"
+  _debug "status_code" "$_gdd_status"
+  _debug2 "response" "$_gdd_body"
+
+  if [ "$_gdd_status" != "200" ]; then
+    check_error="the Docker Hub API returned HTTP $_gdd_status"
+    # an error response is JSON with a message, or e.g. an HTML page from a proxy (only logged)
+    _gdd_message="$(printf '%s' "$_gdd_body" | jq -r '.message // empty' 2> /dev/null | head -n 1)"
+    if [ -n "$_gdd_message" ]; then
+      check_error="$check_error: $_gdd_message"
+    fi
+    if [ -n "$_gdd_body" ]; then
+      _err "$_gdd_body"
+    fi
+    return 1
+  fi
+
+  # consider posibility of replacing jq with pure grep, awk and etc. in the future
+  _gdd_digest="$(printf '%s' "$_gdd_body" | jq -r '.digest // empty' 2> /dev/null)"
+  case "$_gdd_digest" in
+    *:*) remote_digest="${_gdd_digest#*:}" ;;
+  esac
+  if [ -z "$remote_digest" ]; then
+    check_error="no digest in the Docker Hub API response"
+    return 1
+  fi
+}
+
+# ghcr.io: a pull token (anonymous, or with GITHUB_TOKEN), then the Docker-Content-Digest of the tag's manifest,
+# requested with every type docker itself accepts (multi-arch images are an index)
+_get_ghcr_digest() {
+  if [ -n "$GITHUB_TOKEN" ]; then
+    _H1="Authorization: Basic $(printf '%s' "username:$GITHUB_TOKEN" | _base64)"
+  elif [ "$PRIVATE_REPO" = "true" ]; then
+    check_error="GITHUB_TOKEN must be set for private repository access"
+    return 1
+  fi
+
+  # the response carries the token: never logged
+  _ggd_body="$(_get "https://${IMAGE_REGISTRY_API}/token?scope=repository:${IMAGE_PATH}:pull")"
+  _ggd_ret="$?"
+  _H1=""
+  if [ "$_ggd_ret" != "0" ]; then
+    check_error="cannot reach ghcr.io (curl error $_ggd_ret)"
+    return 1
+  fi
+  _ggd_status="$(_http_status)"
+  _debug "status_code" "$_ggd_status"
+  if [ "$_ggd_status" != "200" ]; then
+    check_error="the ghcr.io token request returned HTTP $_ggd_status"
+    if [ -n "$_ggd_body" ]; then
+      _err "$_ggd_body"
+    fi
+    return 1
+  fi
+  _ggd_token="$(printf '%s' "$_ggd_body" | jq -r '.token // empty' 2> /dev/null)"
+  if [ -z "$_ggd_token" ]; then
+    check_error="no token in the ghcr.io token response"
+    return 1
+  fi
+
+  _H1="Authorization: Bearer $_ggd_token"
+  _H2="Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json"
+  _get "https://${IMAGE_REGISTRY_API}/v2/${IMAGE_PATH}/manifests/${IMAGE_TAG}" "onlyheader" > /dev/null
+  _ggd_ret="$?"
+  if [ "$_ggd_ret" != "0" ]; then
+    check_error="cannot reach ghcr.io (curl error $_ggd_ret)"
+    return 1
+  fi
+  _ggd_status="$(_http_status)"
+  _debug "status_code" "$_ggd_status"
+  if [ "$_ggd_status" != "200" ]; then
+    check_error="ghcr.io returned HTTP $_ggd_status for the manifest"
+    return 1
+  fi
+
+  _ggd_digest="$(grep -i '^docker-content-digest:' "$HTTP_HEADER" | tail -n 1 | tr -d '\r' | sed 's/^[^:]*:[[:space:]]*//')"
+  case "$_ggd_digest" in
+    *:*) remote_digest="${_ggd_digest#*:}" ;;
+  esac
+  if [ -z "$remote_digest" ]; then
+    check_error="no Docker-Content-Digest in the ghcr.io manifest response"
+    return 1
+  fi
+}
+
+# other registries: the hash of `docker manifest inspect img` (it contacts the registry); matches the local digest
+# only for images with a plain manifest v2
+_get_manifest_digest() {
+  if ! _gmd_manifest="$(docker manifest inspect "$1" 2> /dev/null)" || [ -z "$_gmd_manifest" ]; then
+    check_error="docker manifest inspect failed"
+    return 1
+  fi
+  remote_digest="$(printf "%s" "$_gmd_manifest" | sha256sum | awk '{print substr($1, 1, 64)}')"
 }
 
 # Check if an update is available for $img, run by the container's image $image_id: sets old_digest (the first
 # local digest) and new_digest (prints nothing); the image is up to date when new_digest is any of its digests.
-# Returns CHECK_UP_TO_DATE, CHECK_UPDATE_AVAILABLE or CHECK_FAILED
+# Returns CHECK_UP_TO_DATE, CHECK_UPDATE_AVAILABLE or CHECK_FAILED (check_error says why)
 check_update() {
   old_digest=""
   new_digest=""
+  check_error=""
 
-  get_local_digests "$image_id"
+  if ! get_local_digests "$image_id"; then
+    check_error="cannot inspect the container's image $image_id"
+    return "$CHECK_FAILED"
+  fi
   _debug "local_digests" "$local_digests"
-  get_remote_digest "$img"
+  if [ -z "$local_digests" ]; then
+    check_error="the image has no registry digest (built or loaded locally?), set the label $LABEL_MODE=none to skip this container"
+    return "$CHECK_FAILED"
+  fi
   old_digest="${local_digests%% *}"
+
+  if ! get_remote_digest "$img"; then
+    return "$CHECK_FAILED"
+  fi
   new_digest="$remote_digest"
-
-  if [ -z "$old_digest" ]; then
-    _err "Local image not found: $img"
-    return "$CHECK_FAILED"
-  fi
-
-  if [ -z "$new_digest" ]; then
-    _err "Remote image not found: $img"
-    return "$CHECK_FAILED"
-  fi
 
   # digests are content addresses: a match from any repository name is the same image
   case " $local_digests " in
@@ -558,6 +708,14 @@ EOF
 # event msg: send the notification for the current container (notify_event logs its own failures)
 _notify_container() {
   (notify_event "$1" "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$2")
+}
+
+# log and notify a failed update check (check_error says why); returns 1
+_check_failed() {
+  _cf_msg="Failed to check for updates of $name ($img): $check_error"
+  _err "$_cf_msg"
+  _notify_container check_failed "$_cf_msg"
+  return 1
 }
 
 # msg: log and notify a failed update; returns 1
@@ -734,6 +892,10 @@ process_container() {
   # Check for update
   check_update
   _pc_check="$?"
+  if [ "$_pc_check" = "$CHECK_FAILED" ]; then
+    _check_failed
+    return 1
+  fi
   if [ "$_pc_check" != "$CHECK_UPDATE_AVAILABLE" ]; then
     _info "No update for $name ($img)"
     return 0

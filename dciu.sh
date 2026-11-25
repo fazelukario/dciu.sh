@@ -561,6 +561,7 @@ process_container() {
     msg="Error pulling image $img for container $name"
     _err "$msg"
     (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
+    return
   fi
 
   msg="Successfully pulled image $img for container $name"

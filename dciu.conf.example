@@ -107,6 +107,11 @@ NOTIFY_EVENT='update_available,updated,update_failed,check_failed'
 # Log file path
 LOG_FILE="$SCRIPT_DIR/dciu.sh.log"
 
+# One run at a time: a run started while another one is going on exits with code 1 and an error naming the lock; a
+# lock left behind by a run that was killed is taken over. LOCK_FILE is a directory, '/tmp/dciu.sh.lock' when not
+# set; a second installation sets its own path, LOCK_FILE='' runs without a lock
+#LOCK_FILE='/tmp/dciu.sh.lock'
+
 # Debug level (debug output goes to stderr):
 # 0: off (default)
 # 1: what dciu does and the key values (resolved labels, digests, notify module, HTTP status)

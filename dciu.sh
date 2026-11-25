@@ -52,7 +52,8 @@ DEFAULT_MODE=monitor \
   DEFAULT_SKIP_LOCAL_IMAGES=true \
   DEFAULT_HTTP_TIMEOUT=30 \
   DEFAULT_OUTPUT_INSECURE=false \
-  DEFAULT_NO_TIMESTAMP=false
+  DEFAULT_NO_TIMESTAMP=false \
+  DEFAULT_LOCK_FILE=/tmp/dciu.sh.lock
 
 # The global settings _init_settings checks: name and type of value (see _setting_value)
 _SETTINGS="MODE mode
@@ -531,9 +532,77 @@ _http_status() {
   grep '^HTTP' "$HTTP_HEADER" 2> /dev/null | tail -n 1 | cut -d ' ' -f 2 | tr -d '\r\n'
 }
 
-# remove this run's temp files
+# remove this run's temp files and release its lock
 _cleanup() {
   if [ -n "$HTTP_HEADER" ]; then rm -f "$HTTP_HEADER"; fi
+  _unlock
+}
+
+# pid: 0 when it is a running process (kill -0, or /proc/<pid> for another user's process)
+_pid_alive() {
+  case "$1" in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  kill -0 "$1" 2> /dev/null || [ -d "/proc/$1" ]
+}
+
+# One run at a time: take the lock LOCK_FILE, a directory holding the PID of the run that owns it. 0 when taken (or
+# LOCK_FILE is empty), 1 after an error: another run holds it, or it can't be created. A lock whose run is gone (a
+# killed run) is taken over. Never rm -r.
+_lock() {
+  [ -n "$LOCK_FILE" ] || return 0
+  if mkdir "$LOCK_FILE" 2> /dev/null; then
+    _lock_own
+    return
+  fi
+  if [ ! -d "$LOCK_FILE" ]; then
+    _err "Cannot create the lock LOCK_FILE='$LOCK_FILE'"
+    return 1
+  fi
+  _lk_pid="$(cat "$LOCK_FILE/pid" 2> /dev/null)"
+  if [ -z "$_lk_pid" ]; then
+    # a run that has just created the lock writes its PID next
+    sleep 1
+    _lk_pid="$(cat "$LOCK_FILE/pid" 2> /dev/null)"
+  fi
+  if _pid_alive "$_lk_pid"; then
+    _err "Another dciu.sh run (PID $_lk_pid) holds the lock $LOCK_FILE"
+    return 1
+  fi
+  if [ -n "$_lk_pid" ]; then
+    _info "Removing the stale lock $LOCK_FILE (PID $_lk_pid is not running)"
+  else
+    _info "Removing the stale lock $LOCK_FILE (no PID in it)"
+  fi
+  rm -f "$LOCK_FILE/pid"
+  rmdir "$LOCK_FILE" 2> /dev/null
+  # another run may have taken the stale lock first
+  if mkdir "$LOCK_FILE" 2> /dev/null; then
+    _lock_own
+    return
+  fi
+  _err "Cannot create the lock LOCK_FILE='$LOCK_FILE'"
+  return 1
+}
+
+# the lock directory was just created by this run: its PID goes in
+_lock_own() {
+  if ! { printf '%s\n' "$$" > "$LOCK_FILE/pid"; } 2> /dev/null; then
+    rmdir "$LOCK_FILE" 2> /dev/null
+    _err "Cannot create the lock LOCK_FILE='$LOCK_FILE'"
+    return 1
+  fi
+  _lock_owned=1
+}
+
+# release the lock this run holds, while it still holds this run's PID
+_unlock() {
+  [ "$_lock_owned" = 1 ] || return 0
+  _lock_owned=""
+  if [ "$(cat "$LOCK_FILE/pid" 2> /dev/null)" = "$$" ]; then
+    rm -f "$LOCK_FILE/pid"
+    rmdir "$LOCK_FILE" 2> /dev/null
+  fi
 }
 
 # Notification helper: call notify modules if exists and event matches filter
@@ -1630,9 +1699,19 @@ main() {
   trap 'exit 143' TERM
   _inithttp
 
+  # one run at a time (LOCK_FILE not set: the default; set to empty: no lock). Released by the EXIT trap too, and
+  # here before every return: a main run inside a command substitution can't count on that subshell's EXIT trap
+  if [ -z "${LOCK_FILE+set}" ]; then
+    LOCK_FILE="$DEFAULT_LOCK_FILE"
+  fi
+  if ! _lock; then
+    return 1
+  fi
+
   # Get all containers
   if ! cids="$(docker ps -q -a)"; then
     _err "Cannot list containers"
+    _unlock
     return 1
   fi
   _init_image_store
@@ -1647,6 +1726,7 @@ main() {
     fi
   done
   _info "All containers processed."
+  _unlock
   return "$_main_ret"
 }
 

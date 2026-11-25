@@ -677,7 +677,7 @@ process_container() {
   _info "$msg"
 
   # Recreate container via user script
-  if ! "$cmd_script" >> "$LOG_FILE"; then
+  if ! "$cmd_script" >> "${LOG_FILE:-/dev/null}"; then
     msg="Cmd script failed: $cmd_script"
     _err "$msg"
     (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
@@ -721,6 +721,15 @@ process_container() {
 # Iterate containers by label and mode
 main() {
   _init_log_levels
+
+  # An unwritable LOG_FILE is reported once and the run logs to the console only: otherwise every log line
+  # prints a shell error, and a cmd script (its output goes to LOG_FILE) would not run at all, leaving its
+  # already removed container not recreated. printf, not ':', so a failed redirect can't exit the shell.
+  if [ -n "$LOG_FILE" ] && ! { printf '' >> "$LOG_FILE"; } 2> /dev/null; then
+    _unwritable_log_file="$LOG_FILE"
+    LOG_FILE=""
+    _err "Cannot write to LOG_FILE='$_unwritable_log_file', logging to the console only"
+  fi
 
   # One temp file per run for the response headers of _post, never one inherited from the environment
   # (the EXIT trap deletes it). Without it notifications fail, but containers are still processed.

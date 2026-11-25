@@ -21,11 +21,11 @@ telegram_send() {
 
   # check required variables
   if [ -z "$TELEGRAM_BOT_APITOKEN" ]; then
-    echo "[Error] TELEGRAM_BOT_APITOKEN is not set" >&2
+    _err "You didn't specify a Telegram BOT API Token TELEGRAM_BOT_APITOKEN yet."
     return 1
   fi
   if [ -z "$TELEGRAM_BOT_CHATID" ]; then
-    echo "[Error] TELEGRAM_BOT_CHATID is not set" >&2
+    _err "You didn't specify a Telegram Chat id TELEGRAM_BOT_CHATID yet."
     return 1
   fi
 
@@ -65,7 +65,7 @@ _🖥 Source:_ \`${src}\`
 EOF
   )
 
-  _debug "text" "$text"
+  _debug2 "text" "$text"
 
   button_url=$(_escape_json "$IMAGE_REGISTRY_URL")
 
@@ -78,7 +78,7 @@ EOF
 EOF
   )
 
-  _debug "reply_markup" "$reply_markup"
+  _debug2 "reply_markup" "$reply_markup"
 
   # build JSON payload
   payload=$(
@@ -92,33 +92,24 @@ EOF
 EOF
   )
 
-  _debug "payload" "$payload"
+  _debug2 "payload" "$payload"
 
   bot_api_url="$TELEGRAM_BOT_URLBASE/bot$TELEGRAM_BOT_APITOKEN/sendMessage"
-  _debug "bot_api_url" "$bot_api_url"
+  _secure_debug "bot_api_url" "$bot_api_url"
 
   # send the message
-  # Capture in the current shell: `$?` is curl's exit status only right after the assignment, never inside a pipe
-  response="$(curl -s -w "\n%{http_code}" -X POST "$bot_api_url" \
-    -H "Content-Type: application/json" \
-    --data "$payload")"
-  _ret="$?"
-  if [ "$_ret" != "0" ]; then
-    _err "Please refer to https://curl.haxx.se/libcurl/c/libcurl-errors.html for error code: $_ret"
+  if ! response="$(_post "$payload" "$bot_api_url" "" "POST" "application/json")"; then
+    _err "Failed to send Telegram notification"
     return 1
   fi
-
-  # -w appends the HTTP code as the last line; the body itself may end with or contain newlines
-  status_code="$(printf "%s" "$response" | tail -n 1)"
-  response="$(printf "%s" "$response" | sed '$d')"
+  status_code="$(_http_status)"
   _debug "status_code" "$status_code"
-  _debug "Response:"
-  _debug "$response"
+  _debug2 "response" "$response"
 
-  if [ "$status_code" -lt 200 ] || [ "$status_code" -ge 300 ]; then
-    _err "[Error] Failed to send Telegram notification, HTTP status: $status_code" >&2
-    return 1
-  fi
-
-  return 0
+  case "$status_code" in
+    2[0-9][0-9]) return 0 ;;
+  esac
+  _err "Failed to send Telegram notification, HTTP status: $status_code"
+  _err "$response"
+  return 1
 }

@@ -23,6 +23,8 @@ PROJECT_NAME="dciu.sh"
 
 PROJECT="https://github.com/fazelukario/$PROJECT_NAME"
 
+USER_AGENT="$PROJECT_NAME/$VER ($PROJECT)"
+
 DEBUG_LEVEL_NONE=0
 DEBUG_LEVEL_1=1
 DEBUG_LEVEL_2=2
@@ -160,6 +162,72 @@ _exists() {
 # function to escape JSON strings
 _escape_json() { printf "%s" "$1" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;s/\n/\\n/g;ta'; }
 
+# print the path of a new temp file
+_mktemp() {
+  if ! mktemp 2> /dev/null; then
+    _err "Cannot create temp file."
+    return 1
+  fi
+}
+
+# HTTP_HEADER: temp file that receives the response headers of _post (one per run, created in main)
+_inithttp() {
+  if [ -z "$HTTP_HEADER" ] || ! touch "$HTTP_HEADER" 2> /dev/null; then
+    HTTP_HEADER="$(_mktemp)" || return 1
+    _debug2 "HTTP_HEADER" "$HTTP_HEADER"
+  fi
+}
+
+# body url [needbase64] [POST|PUT|DELETE] [content_type]  (acme.sh's signature; extra headers from _H1.._H5)
+# Prints the response body (also left in $response) and returns curl's exit code;
+# the HTTP status of the response is read with _http_status. needbase64 is accepted but ignored.
+_post() {
+  body="$1"
+  _post_url="$2"
+  httpmethod="${4:-POST}"
+  _postContentType="$5"
+
+  _debug "$httpmethod"
+  _secure_debug "_post_url" "$_post_url"
+  _secure_debug2 "body" "$body"
+  _debug2 "_postContentType" "$_postContentType"
+
+  if [ -z "$HTTP_HEADER" ]; then
+    _err "Cannot send $httpmethod request: no temp file for the response headers (HTTP_HEADER)"
+    return 1
+  fi
+
+  # no -L: a moved endpoint must fail instead of curl re-sending the POST as GET
+  set -- --silent --dump-header "$HTTP_HEADER" --user-agent "$USER_AGENT" -X "$httpmethod"
+  if [ -n "$_postContentType" ]; then
+    set -- "$@" -H "Content-Type: $_postContentType"
+  fi
+  # curl ignores the empty ones
+  set -- "$@" -H "$_H1" -H "$_H2" -H "$_H3" -H "$_H4" -H "$_H5"
+  if [ -n "$body" ]; then
+    set -- "$@" --data "$body"
+  fi
+
+  response="$(curl "$@" "$_post_url")"
+  _ret="$?"
+  if [ "$_ret" != "0" ]; then
+    _err "Please refer to https://curl.haxx.se/libcurl/c/libcurl-errors.html for error code: $_ret"
+  fi
+  _debug "_ret" "$_ret"
+  printf "%s" "$response"
+  return "$_ret"
+}
+
+# HTTP status code of the last _post response (the last status line, so 100 Continue / proxy CONNECT are skipped)
+_http_status() {
+  grep '^HTTP' "$HTTP_HEADER" 2> /dev/null | tail -n 1 | cut -d ' ' -f 2 | tr -d '\r\n'
+}
+
+# remove this run's temp files
+_cleanup() {
+  if [ -n "$HTTP_HEADER" ]; then rm -f "$HTTP_HEADER"; fi
+}
+
 # Notification helper: call notify modules if exists and event matches filter
 notify_event() {
   event="$1" # e.g. update_available, updated, update_failed, update_skipped
@@ -214,6 +282,9 @@ notify_event() {
     _debug "Found $mod_file for notify module $mod"
 
     if ! (
+      # headers set for another request must not leak into this module's requests (as in acme.sh)
+      export _H1="" _H2="" _H3="" _H4="" _H5=""
+
       # shellcheck disable=SC1090
       if ! . "$mod_file"; then
         _err "Error loading file $mod_file. Please check your API file and try again."
@@ -630,12 +701,21 @@ process_container() {
 main() {
   _init_log_levels
 
+  # One temp file per run for the response headers of _post, never one inherited from the environment
+  # (the EXIT trap deletes it). Without it notifications fail, but containers are still processed.
+  HTTP_HEADER=""
+  _inithttp
+  trap '_cleanup' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
   # Get all containers
   cids="$(docker ps -q -a)"
   for cid in $cids; do
     (process_container "$cid")
   done
   _info "All containers processed."
+  return 0
 }
 
 main

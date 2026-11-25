@@ -21,7 +21,7 @@ discord_send() {
 
   # Ensure webhook URL is set
   if [ -z "$DISCORD_WEBHOOK_URL" ]; then
-    echo "[Error] DISCORD_WEBHOOK_URL is not set" >&2
+    _err "You didn't specify a Discord webhook url DISCORD_WEBHOOK_URL yet."
     return 1
   fi
 
@@ -54,11 +54,11 @@ discord_send() {
   avatar_field=""
   if [ -n "$DISCORD_USERNAME" ]; then
     username_field=",\"username\":\"$(_escape_json "$DISCORD_USERNAME")\""
-    _debug "username_field" "$username_field"
+    _debug2 "username_field" "$username_field"
   fi
   if [ -n "$DISCORD_AVATAR_URL" ]; then
     avatar_field=",\"avatar_url\":\"$(_escape_json "$DISCORD_AVATAR_URL")\""
-    _debug "avatar_field" "$avatar_field"
+    _debug2 "avatar_field" "$avatar_field"
   fi
 
   button_url=$(_escape_json "$IMAGE_REGISTRY_URL")
@@ -153,31 +153,27 @@ discord_send() {
 EOF
   )
 
-  _debug "payload" "$payload"
+  _debug2 "payload" "$payload"
 
   # Send to Discord webhook with components V2 enabled
   webhook_url="$DISCORD_WEBHOOK_URL?wait=true&with_components=true"
-  _debug "webhook_url" "$webhook_url"
+  _secure_debug "webhook_url" "$webhook_url"
 
-  curl -s -w "\n%{http_code}" -X POST "$webhook_url" \
-    -H "Content-Type: application/json" \
-    --data "$payload" | {
-    _ret="$?"
-    read -r response
-    read -r status_code
-    _debug "status_code" "$status_code"
-    _debug "Response:"
-    _debug "$response"
+  if ! response="$(_post "$payload" "$webhook_url" "" "POST" "application/json")"; then
+    _err "Failed to send Discord notification"
+    return 1
+  fi
+  status_code="$(_http_status)"
+  # an error page may echo the request URL, which carries the webhook token
+  webhook_token="${DISCORD_WEBHOOK_URL##*/}"
+  response="$(_hide_secret "$response" "${webhook_token%%\?*}")"
+  _debug "status_code" "$status_code"
+  _debug2 "response" "$response"
 
-    if [ "$_ret" != "0" ]; then
-      _err "Please refer to https://curl.haxx.se/libcurl/c/libcurl-errors.html for error code: $_ret"
-    fi
-
-    if [ "$status_code" -lt 200 ] || [ "$status_code" -ge 300 ]; then
-      _err "[Error] Failed to send Discord notification, HTTP status: $status_code" >&2
-      return 1
-    fi
-  }
-
-  return 0
+  case "$status_code" in
+    2[0-9][0-9]) return 0 ;;
+  esac
+  _err "Failed to send Discord notification, HTTP status: $status_code"
+  _err "$response"
+  return 1
 }

@@ -33,6 +33,11 @@ LOG_LEVEL_3=3
 
 HIDDEN_VALUE="[hidden](set OUTPUT_INSECURE=1 to see this value)"
 
+# check_update return codes
+CHECK_UP_TO_DATE=0
+CHECK_UPDATE_AVAILABLE=1
+CHECK_FAILED=2
+
 # Logging: _info -> stdout, _err and _debug* -> stderr; all of them also go to LOG_FILE
 # (debug lines only up to LOG_LEVEL, which defaults to DEBUG).
 # Except for _err (always returns 1), the helpers return the caller's $? untouched.
@@ -379,23 +384,23 @@ parse_image() {
   fi
 }
 
-# Get local image digest (first RepoDigest)
+# Get local image digest (first RepoDigest): img -> local_digest
 get_local_digest() {
-  img="$1"
-  docker inspect --format '{{index .RepoDigests 0}}' "$img" 2> /dev/null | awk -F'@' '{print $2}' | awk -F':' '{print $2}'
+  _gld_img="$1"
+  local_digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$_gld_img" 2> /dev/null | awk -F'@' '{print $2}' | awk -F':' '{print $2}')"
 }
 
-# Get remote image digest without pulling
+# Get remote image digest without pulling: img -> remote_digest (empty when not found)
 get_remote_digest() {
-  img="$1"
+  _grd_img="$1"
+  remote_digest=""
 
   if [ "$IMAGE_REGISTRY" = "hub.docker.com" ] && [ "$PRIVATE_REPO" != "true" ]; then
     # Get manifest digest from Docker Hub API
     api="https://${IMAGE_REGISTRY_API}/v2/namespaces/${IMAGE_NAMESPACE}/repositories/${IMAGE_REPOSITORY}/tags/${IMAGE_TAG}"
     _debug2 "api" "$api"
     resp=$(curl -s "$api")
-    digest=$(echo "$resp" | jq -r '.digest' | awk -F':' '{print $2}') # consider posibility of replacing jq with pure grep, awk and etc. in the future
-    printf "%s" "$digest"
+    remote_digest=$(printf '%s' "$resp" | jq -r '.digest' | awk -F':' '{print $2}') # consider posibility of replacing jq with pure grep, awk and etc. in the future
   elif [ "$IMAGE_REGISTRY" = "ghcr.io" ]; then
     # Token URL for GHCR
     token_url="https://${IMAGE_REGISTRY_API}/token?scope=repository:${IMAGE_PATH}:pull"
@@ -403,8 +408,7 @@ get_remote_digest() {
     # Retrieve token: use basic auth if credentials provided
     if [ -n "$GITHUB_TOKEN" ] || [ "$PRIVATE_REPO" = "true" ]; then
       if [ -z "$GITHUB_TOKEN" ]; then
-        _err "GITHUB_TOKEN must be set for private repository access ($img)"
-        printf "%s" ""
+        _err "GITHUB_TOKEN must be set for private repository access ($_grd_img)"
         return 1
       fi
       token=$(curl -s -u "username:$GITHUB_TOKEN" "$token_url" | awk -F'"' 'NR==1{print $4}')
@@ -414,69 +418,102 @@ get_remote_digest() {
     # Get digest from response header
     header=$(curl -sI -H "Authorization: Bearer $token" -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
       "https://${IMAGE_REGISTRY_API}/v2/${IMAGE_PATH}/manifests/${IMAGE_TAG}")
-    digest=$(echo "$header" | grep -i 'docker-content-digest' | awk '{print $2}' | tr -d '\r' | tr -d '\n' | awk -F':' '{print $2}')
-    printf "%s" "$digest"
+    remote_digest=$(printf '%s\n' "$header" | grep -i 'docker-content-digest' | awk '{print $2}' | tr -d '\r' | tr -d '\n' | awk -F':' '{print $2}')
   else
     # manifest inspect contacts registry to get manifest digest
     # supported only those images that use pure Manifest V2 format
-    printf "%s" "$(docker manifest inspect "$img" 2> /dev/null)" | sha256sum | awk '{print substr($1, 1, 64)}'
+    remote_digest="$(printf "%s" "$(docker manifest inspect "$_grd_img" 2> /dev/null)" | sha256sum | awk '{print substr($1, 1, 64)}')"
   fi
 }
 
-# Check if update available: outputs old and new digests and returns 1 if update needed
+# Check if an update is available for $img: sets old_digest and new_digest (prints nothing),
+# returns CHECK_UP_TO_DATE, CHECK_UPDATE_AVAILABLE or CHECK_FAILED
 check_update() {
-  img="$1"
+  old_digest=""
+  new_digest=""
 
-  old="$(get_local_digest "$img")"
-  new="$(get_remote_digest "$img")"
+  get_local_digest "$img"
+  get_remote_digest "$img"
+  old_digest="$local_digest"
+  new_digest="$remote_digest"
 
-  if [ -z "$old" ]; then
+  if [ -z "$old_digest" ]; then
     _err "Local image not found: $img"
-    return 0
+    return "$CHECK_FAILED"
   fi
 
-  if [ -z "$new" ]; then
+  if [ -z "$new_digest" ]; then
     _err "Remote image not found: $img"
-    return 0
+    return "$CHECK_FAILED"
   fi
 
   # Check if digests are different
-  if [ "$old" != "$new" ]; then
-    echo "$old $new"
-    return 1
+  if [ "$old_digest" != "$new_digest" ]; then
+    return "$CHECK_UPDATE_AVAILABLE"
   fi
-  return 0
+  return "$CHECK_UP_TO_DATE"
 }
 
-# Check for update and handle based on mode label
-process_container() {
-  cid="$1"
-  img="$(docker inspect --format '{{.Config.Image}}' "$cid")"
-  name="$(docker inspect --format '{{.Name}}' "$cid" | sed 's#^/##')"
+# Read container cid with one docker inspect: sets name, img, image_id, running, the settings (container
+# label, else global config) and the Swarm/Compose labels.
+# Returns 1 when docker inspect fails, 2 when a value contains a line break (the output has one value per line).
+_read_container() {
+  _rc_cid="$1"
 
-  # Determine mode: container label overrides default
-  mode_label="$(docker inspect --format "{{index .Config.Labels \"$LABEL_MODE\"}}" "$cid")"
-  mode=${mode_label:-$MODE}
+  # one value per line, in the order they are read below; the last line marks a complete, unshifted read
+  _rc_format="{{.Name}}
+{{.Config.Image}}
+{{.Image}}
+{{.State.Running}}
+{{index .Config.Labels \"$LABEL_MODE\"}}
+{{index .Config.Labels \"$LABEL_UPDATE_STOPPED\"}}
+{{index .Config.Labels \"$LABEL_START_STOPPED\"}}
+{{index .Config.Labels \"$LABEL_PRUNE_DANGLING\"}}
+{{index .Config.Labels \"$LABEL_UPDATE_COMPOSE\"}}
+{{index .Config.Labels \"$LABEL_PRIVATE_REPO\"}}
+{{index .Config.Labels \"com.docker.stack.namespace\"}}
+{{index .Config.Labels \"com.docker.compose.project\"}}
+{{index .Config.Labels \"com.docker.compose.service\"}}
+{{index .Config.Labels \"com.docker.compose.project.config_files\"}}
+dciu-inspect-end"
+  _rc_out="$(docker container inspect --format "$_rc_format" "$_rc_cid" 2> /dev/null)" || return 1
 
-  # Determine update_stopped flag
-  upd_lbl="$(docker inspect --format "{{index .Config.Labels \"$LABEL_UPDATE_STOPPED\"}}" "$cid")"
-  update_stopped=${upd_lbl:-$UPDATE_STOPPED}
-  # Determine start_stopped flag
-  st_lbl="$(docker inspect --format "{{index .Config.Labels \"$LABEL_START_STOPPED\"}}" "$cid")"
-  start_stopped=${st_lbl:-$START_STOPPED}
+  _rc_end=""
+  {
+    IFS= read -r _rc_name
+    IFS= read -r img
+    # shellcheck disable=SC2034 # image_id: the container's image, compared by check_update in the next step
+    IFS= read -r image_id
+    IFS= read -r running
+    IFS= read -r _rc_mode
+    IFS= read -r _rc_update_stopped
+    IFS= read -r _rc_start_stopped
+    IFS= read -r _rc_prune_dangling
+    IFS= read -r _rc_update_compose
+    IFS= read -r PRIVATE_REPO
+    IFS= read -r stack_ns
+    IFS= read -r compose_project
+    IFS= read -r compose_service
+    IFS= read -r compose_file
+    IFS= read -r _rc_end
+    # a line break in a value shifts every later line: nothing may follow the end marker
+    if IFS= read -r _rc_more; then _rc_end=""; fi
+  } << EOF
+$_rc_out
+EOF
+  if [ "$_rc_end" != "dciu-inspect-end" ]; then
+    return 2
+  fi
 
-  # Determine prune_dangling flag (label overrides config)
-  prune_lbl="$(docker inspect --format "{{index .Config.Labels \"$LABEL_PRUNE_DANGLING\"}}" "$cid")"
-  prune_dangling=${prune_lbl:-$PRUNE_DANGLING}
+  name="${_rc_name#/}"
+  # container label overrides global config
+  mode="${_rc_mode:-$MODE}"
+  update_stopped="${_rc_update_stopped:-$UPDATE_STOPPED}"
+  start_stopped="${_rc_start_stopped:-$START_STOPPED}"
+  prune_dangling="${_rc_prune_dangling:-$PRUNE_DANGLING}"
+  update_compose="${_rc_update_compose:-$UPDATE_COMPOSE}"
 
-  # Determine update_compose flag (label overrides config)
-  compose_lbl="$(docker inspect --format "{{index .Config.Labels \"$LABEL_UPDATE_COMPOSE\"}}" "$cid")"
-  update_compose=${compose_lbl:-$UPDATE_COMPOSE}
-
-  # Determine if container using image from private repository
-  PRIVATE_REPO="$(docker inspect --format "{{index .Config.Labels \"$LABEL_PRIVATE_REPO\"}}" "$cid")"
-
-  _debug "container" "$name ($cid)"
+  _debug "container" "$name ($_rc_cid)"
   _debug "image" "$img"
   _debug "mode" "$mode"
   _debug "update_stopped" "$update_stopped"
@@ -484,236 +521,222 @@ process_container() {
   _debug "prune_dangling" "$prune_dangling"
   _debug "update_compose" "$update_compose"
   _debug "private_repo" "$PRIVATE_REPO"
+}
+
+# event msg: send the notification for the current container (notify_event logs its own failures)
+_notify_container() {
+  (notify_event "$1" "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$2")
+}
+
+# msg: log and notify a failed update; returns 1
+_update_failed() {
+  _err "$1"
+  _notify_container update_failed "$1"
+  return 1
+}
+
+# msg: log and notify a skipped update; returns 0
+_update_skipped() {
+  _info "$1"
+  _notify_container update_skipped "$1"
+  return 0
+}
+
+# msg: notify the finished update and prune dangling images if enabled; returns 1 only when the prune failed
+_finish_update() {
+  _notify_container updated "$1"
+
+  # Prune dangling images if enabled
+  if [ "$prune_dangling" != "true" ]; then
+    return 0
+  fi
+
+  _info "Pruning dangling images"
+  if ! docker image prune -f; then
+    _err "Error pruning dangling images"
+    return 1
+  fi
+  _info "Dangling images pruned successfully"
+}
+
+# Update the container's Docker Compose service; returns 0 (also when skipped), or 1 when the update failed
+_update_compose_service() {
+  if [ "$update_compose" != "true" ]; then
+    _update_skipped "Skipping container $name ($img) [Service \"$compose_service\"] in Docker Compose project $compose_project ($compose_file): update_compose=$update_compose"
+    return 0
+  fi
+
+  # Check if compose file exists
+  if [ -z "$compose_file" ]; then
+    _update_failed "Docker Compose file not found for container $name ($img)"
+    return 1
+  fi
+
+  _info "Updating Docker Compose service $compose_service in project $compose_project ($compose_file)"
+
+  if command -v docker compose > /dev/null 2>&1; then
+    comp_cmd="docker compose"
+  elif command -v docker-compose > /dev/null 2>&1; then
+    comp_cmd="docker-compose"
+  else
+    _update_failed "Neither docker compose nor docker-compose found"
+    return 1
+  fi
+
+  # the container as the messages below name it
+  _ucs_ctr="$name ($compose_service) in Compose project $compose_project ($compose_file)"
+
+  if ! $comp_cmd -f "$compose_file" pull "$compose_service"; then
+    _update_failed "Error pulling image $img for container $_ucs_ctr"
+    return 1
+  fi
+  _info "Successfully updated image $img for container $_ucs_ctr"
+
+  # Stop and remove container
+  if ! $comp_cmd -f "$compose_file" stop "$compose_service"; then
+    _update_failed "Error stopping container $_ucs_ctr"
+    return 1
+  fi
+  if ! $comp_cmd -f "$compose_file" rm -f "$compose_service"; then
+    _update_failed "Error removing container $_ucs_ctr"
+    return 1
+  fi
+  _info "Container $_ucs_ctr stopped and removed successfully"
+
+  # Recreate container
+  if ! $comp_cmd -f "$compose_file" create --force-recreate --build; then
+    _update_failed "Error recreating container $_ucs_ctr"
+    return 1
+  fi
+  _info "Container $_ucs_ctr recreated successfully"
+
+  # Start container if it was running before or if start_stopped=true
+  if [ "$start_stopped" = "true" ] || [ "$running" = "true" ]; then
+    if ! $comp_cmd -f "$compose_file" start; then
+      _update_failed "Error starting container $_ucs_ctr"
+      return 1
+    fi
+    msg="Container $_ucs_ctr (re)started successfully"
+  else
+    msg="Container $_ucs_ctr not started due to start_stopped=$start_stopped"
+  fi
+  _info "$msg"
+
+  _finish_update "$msg"
+}
+
+# Update the container with its cmd script ($SCRIPT_DIR/cmds/<name>.sh); returns 0, or 1 when the update failed
+_update_cmd_script() {
+  cmd_script="$SCRIPT_DIR/cmds/${name}.sh"
+  if ! [ -x "$cmd_script" ]; then
+    _update_failed "Cmd script not found or not executable: $cmd_script"
+    return 1
+  fi
+
+  # Pull new image
+  if ! docker pull "$img"; then
+    _update_failed "Error pulling image $img for container $name"
+    return 1
+  fi
+  _info "Successfully pulled image $img for container $name"
+
+  # Stop and remove container
+  if ! docker stop "$cid"; then
+    _update_failed "Error stopping container $name ($img)"
+    return 1
+  fi
+  if ! docker rm "$cid"; then
+    _update_failed "Error removing container $name ($img)"
+    return 1
+  fi
+  _info "Container $name ($img) stopped and removed successfully"
+
+  # Recreate container via user script
+  if ! "$cmd_script" >> "${LOG_FILE:-/dev/null}"; then
+    _update_failed "Cmd script failed: $cmd_script"
+    return 1
+  fi
+  _info "Container $name recreated successfully"
+
+  # Start container if it was running before or if start_stopped=true
+  if [ "$start_stopped" = "true" ] || [ "$running" = "true" ]; then
+    if ! docker start "$name"; then
+      _update_failed "Failed to start container $name"
+      return 1
+    fi
+    msg="Container $name ($img) (re)started successfully"
+  else
+    msg="Container $name ($img) not started due to start_stopped=$start_stopped"
+  fi
+  _info "$msg"
+
+  _finish_update "$msg"
+}
+
+# Check container cid for an update and handle it as its mode says.
+# Returns 0, or 1 when the container can't be read or its update failed.
+process_container() {
+  cid="$1"
+
+  _read_container "$cid"
+  case "$?" in
+    0) ;;
+    2)
+      _err "Cannot read the settings of container $cid: a label value contains a line break"
+      return 1
+      ;;
+    *)
+      _err "Cannot inspect container $cid"
+      return 1
+      ;;
+  esac
 
   # Skip if none mode
   if [ "$mode" = "none" ]; then
     _info "Skipping container $name ($img) due to selected mode: $mode"
-    return
+    return 0
   fi
 
   parse_image "$img"
 
   # Check for update
-  if dig="$(check_update "$img")"; then
+  check_update
+  _pc_check="$?"
+  if [ "$_pc_check" != "$CHECK_UPDATE_AVAILABLE" ]; then
     _info "No update for $name ($img)"
-    return
+    return 0
   fi
 
-  old_digest="$(echo "$dig" | awk '{print $1}')"
-  new_digest="$(echo "$dig" | awk '{print $2}')"
   _debug "old_digest" "$old_digest"
   _debug "new_digest" "$new_digest"
 
-  running="$(docker inspect --format '{{.State.Running}}' "$cid")"
-
   msg="$mode: update available for $name ($img): $old_digest -> $new_digest"
   _info "$msg"
-  (notify_event update_available "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
+  _notify_container update_available "$msg"
 
-  if ! [ "$mode" = "autoupdate" ]; then
-    return
+  if [ "$mode" != "autoupdate" ]; then
+    return 0
   fi
 
   # Check container running state
   if [ "$running" != "true" ] && [ "$update_stopped" != "true" ]; then
-    # Stopped container
-    msg="Skipping stopped container $name ($img): update_stopped=$update_stopped"
-    _info "$msg"
-    (notify_event update_skipped "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
-    return
+    _update_skipped "Skipping stopped container $name ($img): update_stopped=$update_stopped"
+    return 0
   fi
 
   # Skip containers that are part of Swarm stack
-  stack_ns="$(docker inspect --format '{{index .Config.Labels "com.docker.stack.namespace"}}' "$cid")"
   if [ -n "$stack_ns" ]; then
     msg="Skipping container $name ($img): part of Docker Swarm stack ($stack_ns)"
     msg="$msg [Docker Swarm currently not supported due to lack of resources for testing, if you want to help, feel free to open an issue or PR]"
-    _info "$msg"
-    (notify_event update_skipped "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
-    return
+    _update_skipped "$msg"
+    return 0
   fi
 
   # Handle containers part of Docker Compose project
-  compose_project="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$cid")"
   if [ -n "$compose_project" ]; then
-    compose_service="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$cid")"
-    compose_file="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$cid")"
-
-    if [ "$update_compose" != "true" ]; then
-      msg="Skipping container $name ($img) [Service \"$compose_service\"] in Docker Compose project $compose_project ($compose_file): update_compose=$update_compose"
-      _info "$msg"
-      (notify_event update_skipped "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
-      return
-    fi
-
-    # Check if compose file exists
-    if [ -z "$compose_file" ]; then
-      msg="Docker Compose file not found for container $name ($img)"
-      _err "$msg"
-      (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
-      return
-    fi
-
-    msg="Updating Docker Compose service $compose_service in project $compose_project ($compose_file)"
-    _info "$msg"
-
-    if command -v docker compose > /dev/null 2>&1; then
-      comp_cmd="docker compose"
-    elif command -v docker-compose > /dev/null 2>&1; then
-      comp_cmd="docker-compose"
-    else
-      msg="Neither docker compose nor docker-compose found"
-      _err "$msg"
-      (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
-      return
-    fi
-
-    if ! $comp_cmd -f "$compose_file" pull "$compose_service"; then
-      msg="Error pulling image $img for container $name ($compose_service) in Compose project $compose_project ($compose_file)"
-      _err "$msg"
-      (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
-      return
-    fi
-
-    msg="Successfully updated image $img for container $name ($compose_service) in Compose project $compose_project ($compose_file)"
-    _info "$msg"
-
-    # Stop and remove container
-    if ! $comp_cmd -f "$compose_file" stop "$compose_service"; then
-      msg="Error stopping container $name ($compose_service) in Compose project $compose_project ($compose_file)"
-      _err "$msg"
-      (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
-      return
-    fi
-    if ! $comp_cmd -f "$compose_file" rm -f "$compose_service"; then
-      msg="Error removing container $name ($compose_service) in Compose project $compose_project ($compose_file)"
-      _err "$msg"
-      (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
-      return
-    fi
-
-    msg="Container $name ($compose_service) in Compose project $compose_project ($compose_file) stopped and removed successfully"
-    _info "$msg"
-
-    # Recreate container
-    if ! $comp_cmd -f "$compose_file" create --force-recreate --build; then
-      msg="Error recreating container $name ($compose_service) in Compose project $compose_project ($compose_file)"
-      _err "$msg"
-      (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
-      return
-    fi
-
-    msg="Container $name ($compose_service) in Compose project $compose_project ($compose_file) recreated successfully"
-    _info "$msg"
-
-    # Start container if it was running before or if start_stopped=true
-    if [ "$start_stopped" = "true" ] || [ "$running" = "true" ]; then
-      if ! $comp_cmd -f "$compose_file" start; then
-        msg="Error starting container $name ($compose_service) in Compose project $compose_project ($compose_file)"
-        _err "$msg"
-        (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
-        return
-      fi
-
-      msg="Container $name ($compose_service) in Compose project $compose_project ($compose_file) (re)started successfully"
-      _info "$msg"
-    else
-      msg="Container $name ($compose_service) in Compose project $compose_project ($compose_file) not started due to start_stopped=$start_stopped"
-      _info "$msg"
-    fi
-
-    (notify_event updated "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
-
-    # Prune dangling images if enabled
-    if ! [ "$prune_dangling" = "true" ]; then
-      return
-    fi
-
-    _info "Pruning dangling images"
-    if docker image prune -f; then
-      _info "Dangling images pruned successfully"
-    else
-      _err "Error pruning dangling images"
-    fi
-
-    return
-  fi
-
-  cmd_script="$SCRIPT_DIR/cmds/${name}.sh"
-  if ! [ -x "$cmd_script" ]; then
-    msg="Cmd script not found or not executable: $cmd_script"
-    _err "$msg"
-    (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
-    return
-  fi
-
-  # Pull new image
-  if ! docker pull "$img"; then
-    msg="Error pulling image $img for container $name"
-    _err "$msg"
-    (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
-    return
-  fi
-
-  msg="Successfully pulled image $img for container $name"
-  _info "$msg"
-
-  # Stop and remove container
-  if ! docker stop "$cid"; then
-    msg="Error stopping container $name ($img)"
-    _err "$msg"
-    (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
-    return
-  fi
-  if ! docker rm "$cid"; then
-    msg="Error removing container $name ($img)"
-    _err "$msg"
-    (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
-    return
-  fi
-
-  msg="Container $name ($img) stopped and removed successfully"
-  _info "$msg"
-
-  # Recreate container via user script
-  if ! "$cmd_script" >> "${LOG_FILE:-/dev/null}"; then
-    msg="Cmd script failed: $cmd_script"
-    _err "$msg"
-    (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
-    return
-  fi
-
-  msg="Container $name recreated successfully"
-  _info "$msg"
-
-  # Start container if it was running before or if start_stopped=true
-  if [ "$start_stopped" = "true" ] || [ "$running" = "true" ]; then
-    if ! docker start "$name"; then
-      msg="Failed to start container $name"
-      _err "$msg"
-      (notify_event update_failed "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
-      return
-    fi
-
-    msg="Container $name ($img) (re)started successfully"
-    _info "$msg"
+    _update_compose_service
   else
-    msg="Container $name ($img) not started due to start_stopped=$start_stopped"
-    _info "$msg"
-  fi
-
-  (notify_event updated "$name" "$img" "$old_digest" "$new_digest" "$mode" "$running" "$msg")
-
-  # Prune dangling images if enabled
-  if ! [ "$prune_dangling" = "true" ]; then
-    return
-  fi
-
-  _info "Pruning dangling images"
-  if docker image prune -f; then
-    _info "Dangling images pruned successfully"
-  else
-    _err "Error pruning dangling images"
+    _update_cmd_script
   fi
 }
 

@@ -384,10 +384,41 @@ parse_image() {
   fi
 }
 
-# Get local image digest (first RepoDigest): img -> local_digest
-get_local_digest() {
-  _gld_img="$1"
-  local_digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$_gld_img" 2> /dev/null | awk -F'@' '{print $2}' | awk -F':' '{print $2}')"
+# Detect the image store once per run (IMAGE_STORE): on the containerd image store (Docker Desktop, fresh
+# Docker 29 installs) an image ID is the digest of the pulled index/manifest; on the classic store
+# (graph drivers) it is the digest of the image config. Unknown counts as classic.
+_init_image_store() {
+  IMAGE_STORE="classic"
+  case "$(docker info --format '{{json .DriverStatus}}' 2> /dev/null)" in
+    *io.containerd.snapshotter*) IMAGE_STORE="containerd" ;;
+  esac
+  _debug "IMAGE_STORE" "$IMAGE_STORE"
+}
+
+# image: append the hex digests of image to local_digests (space-separated, no duplicates): every RepoDigest
+# (one per manifest it was pulled through, listed by name, not by age) and, on the containerd store, its ID.
+# Returns 1 when the image can't be inspected.
+_add_image_digests() {
+  _aid_image="$1"
+  _aid_refs="$(docker image inspect --format '{{range .RepoDigests}}{{.}} {{end}}' "$_aid_image" 2> /dev/null)" || return 1
+  if [ "$IMAGE_STORE" = "containerd" ]; then
+    case "$_aid_image" in sha256:*) _aid_refs="$_aid_refs $_aid_image" ;; esac
+  fi
+  for _aid_ref in $_aid_refs; do
+    # repo@sha256:<hex> or sha256:<hex> -> <hex>
+    _aid_digest="${_aid_ref##*@}"
+    _aid_digest="${_aid_digest#*:}"
+    case " $local_digests " in
+      *" $_aid_digest "*) ;;
+      *) local_digests="${local_digests:+$local_digests }$_aid_digest" ;;
+    esac
+  done
+}
+
+# Get the local digests of the container's image: image_id -> local_digests; returns 1 when the image can't be inspected
+get_local_digests() {
+  local_digests=""
+  _add_image_digests "$1"
 }
 
 # Get remote image digest without pulling: img -> remote_digest (empty when not found)
@@ -426,15 +457,17 @@ get_remote_digest() {
   fi
 }
 
-# Check if an update is available for $img: sets old_digest and new_digest (prints nothing),
-# returns CHECK_UP_TO_DATE, CHECK_UPDATE_AVAILABLE or CHECK_FAILED
+# Check if an update is available for $img, run by the container's image $image_id: sets old_digest (the first
+# local digest) and new_digest (prints nothing); the image is up to date when new_digest is any of its digests.
+# Returns CHECK_UP_TO_DATE, CHECK_UPDATE_AVAILABLE or CHECK_FAILED
 check_update() {
   old_digest=""
   new_digest=""
 
-  get_local_digest "$img"
+  get_local_digests "$image_id"
+  _debug "local_digests" "$local_digests"
   get_remote_digest "$img"
-  old_digest="$local_digest"
+  old_digest="${local_digests%% *}"
   new_digest="$remote_digest"
 
   if [ -z "$old_digest" ]; then
@@ -447,11 +480,11 @@ check_update() {
     return "$CHECK_FAILED"
   fi
 
-  # Check if digests are different
-  if [ "$old_digest" != "$new_digest" ]; then
-    return "$CHECK_UPDATE_AVAILABLE"
-  fi
-  return "$CHECK_UP_TO_DATE"
+  # digests are content addresses: a match from any repository name is the same image
+  case " $local_digests " in
+    *" $new_digest "*) return "$CHECK_UP_TO_DATE" ;;
+  esac
+  return "$CHECK_UPDATE_AVAILABLE"
 }
 
 # Read container cid with one docker inspect: sets name, img, image_id, running, the settings (container
@@ -482,7 +515,6 @@ dciu-inspect-end"
   {
     IFS= read -r _rc_name
     IFS= read -r img
-    # shellcheck disable=SC2034 # image_id: the container's image, compared by check_update in the next step
     IFS= read -r image_id
     IFS= read -r running
     IFS= read -r _rc_mode
@@ -763,6 +795,7 @@ main() {
 
   # Get all containers
   cids="$(docker ps -q -a)"
+  _init_image_store
   for cid in $cids; do
     (process_container "$cid")
   done

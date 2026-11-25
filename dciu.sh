@@ -3,8 +3,6 @@
 # dciu.sh - Docker Container Image Updater (dciu)
 
 # TODO:
-# - Refactor (get rid of echo_log in favor of _debug, _info, _err) \
-#   and standardize logging and log messages across script and all notify modules (inspire from acme.sh)
 # - Add README.md with usage instructions, examples and configuration
 # - Add LICENSE file and repository information
 # - Add support for private repositories in Docker Hub
@@ -17,7 +15,7 @@
 # - (Probably in very far future) Add colored output (like acme.sh's __red/__green)
 
 # shellcheck disable=SC2034
-VER=2.2.1
+VER=2.3.0
 
 PROJECT_NAME="dciu.sh"
 

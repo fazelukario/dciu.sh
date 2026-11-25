@@ -32,7 +32,7 @@ smtp_send() {
 
   # find or validate SMTP_BIN
   if [ -n "$SMTP_BIN" ] && ! _exists "$SMTP_BIN"; then
-    echo "[Error] SMTP_BIN '$SMTP_BIN' not found" >&2
+    _err "SMTP_BIN '$SMTP_BIN' not found"
     return 1
   fi
   if [ -z "$SMTP_BIN" ]; then
@@ -44,11 +44,12 @@ smtp_send() {
       fi
     done
     if [ -z "$SMTP_BIN" ]; then
-      echo "[Error] smtp notify requires curl or Python, but can't find any." >&2
-      echo '[Error] If you have one of them, define SMTP_BIN="/path/to/curl_or_python".' >&2
+      _err "smtp notify requires curl or Python, but can't find any."
+      _err 'If you have one of them, define SMTP_BIN="/path/to/curl_or_python".'
       return 1
     fi
   fi
+  _debug "SMTP_BIN" "$SMTP_BIN"
 
   # Strip CR and NL from text to prevent MIME header injection
   # text
@@ -66,30 +67,33 @@ smtp_send() {
   # validate required configs
   SMTP_FROM="$(_clean_email_header "$SMTP_FROM")"
   if [ -z "$SMTP_FROM" ]; then
-    echo "[Error] You must define SMTP_FROM as the sender email address." >&2
+    _err "You must define SMTP_FROM as the sender email address."
     return 1
   fi
   if _email_has_display_name "$SMTP_FROM"; then
-    echo "[Error] SMTP_FROM must be only a simple email address (sender@example.com)." >&2
-    echo "[Error] Change your SMTP_FROM='$SMTP_FROM' to remove the display name." >&2
+    _err "SMTP_FROM must be only a simple email address (sender@example.com)."
+    _err "Change your SMTP_FROM='$SMTP_FROM' to remove the display name."
     return 1
   fi
+  _debug "SMTP_FROM" "$SMTP_FROM"
 
   SMTP_TO="$(_clean_email_header "$SMTP_TO")"
   if [ -z "$SMTP_TO" ]; then
-    echo "[Error] You must define SMTP_TO as the recipient email address(es)." >&2
+    _err "You must define SMTP_TO as the recipient email address(es)."
     return 1
   fi
   if _email_has_display_name "$SMTP_TO"; then
-    echo "[Error] SMTP_TO must be only simple email addresses (to@example.com,to2@example.com)." >&2
-    echo "[Error] Change your SMTP_TO='$SMTP_TO' to remove the display name(s)." >&2
+    _err "SMTP_TO must be only simple email addresses (to@example.com,to2@example.com)."
+    _err "Change your SMTP_TO='$SMTP_TO' to remove the display name(s)."
     return 1
   fi
+  _debug "SMTP_TO" "$SMTP_TO"
 
   if [ -z "$SMTP_HOST" ]; then
-    echo "[Error] You must define SMTP_HOST as the SMTP server hostname." >&2
+    _err "You must define SMTP_HOST as the SMTP server hostname."
     return 1
   fi
+  _debug "SMTP_HOST" "$SMTP_HOST"
 
   if [ -z "$SMTP_SECURE" ]; then SMTP_SECURE="$SMTP_SECURE_DEFAULT"; fi
 
@@ -99,25 +103,31 @@ smtp_send() {
     "ssl") smtp_port_default="465" ;;
     "tls") smtp_port_default="587" ;;
     *)
-      echo "[Error] Invalid SMTP_SECURE='$SMTP_SECURE'. It must be 'ssl', 'tls' or 'none'." >&2
+      _err "Invalid SMTP_SECURE='$SMTP_SECURE'. It must be 'ssl', 'tls' or 'none'."
       return 1
       ;;
   esac
+  _debug "SMTP_SECURE" "$SMTP_SECURE"
 
   if [ -z "$SMTP_PORT" ]; then SMTP_PORT="$smtp_port_default"; fi
   case "$SMTP_PORT" in
     *[!0-9]*)
-      echo "[Error] Invalid SMTP_PORT='$SMTP_PORT'. It must be a port number." >&2
+      _err "Invalid SMTP_PORT='$SMTP_PORT'. It must be a port number."
       return 1
       ;;
   esac
+  _debug "SMTP_PORT" "$SMTP_PORT"
+
+  _debug "SMTP_USERNAME" "$SMTP_USERNAME"
+  _secure_debug "SMTP_PASSWORD" "$SMTP_PASSWORD"
 
   if [ -z "$SMTP_TIMEOUT" ]; then SMTP_TIMEOUT="$SMTP_TIMEOUT_DEFAULT"; fi
+  _debug "SMTP_TIMEOUT" "$SMTP_TIMEOUT"
 
   SMTP_X_MAILER="$(_clean_email_header "$PROJECT_NAME $VER --notify-hook smtp ($SMTP_BIN)")"
 
   # Careful: this may include SMTP_PASSWORD in plaintext!
-  if [ "${DEBUG:-0}" -ge 1 ]; then
+  if [ "${DEBUG:-$DEBUG_LEVEL_NONE}" -ge "$DEBUG_LEVEL_2" ]; then
     SMTP_SHOW_TRANSCRIPT="True"
   else
     SMTP_SHOW_TRANSCRIPT=""
@@ -125,6 +135,7 @@ smtp_send() {
 
   SMTP_SUBJECT="[dciu.sh] Container \"$container\" on $NOTIFY_SOURCE: $event"
   SMTP_SUBJECT=$(_clean_email_header "$SMTP_SUBJECT")
+  _debug "SMTP_SUBJECT" "$SMTP_SUBJECT"
 
   content=$(
     cat << EOF
@@ -140,6 +151,7 @@ EOF
   )
 
   SMTP_CONTENT="$(printf "%s" "$content")"
+  _debug2 "SMTP_CONTENT" "$SMTP_CONTENT"
 
   ##
   ## curl smtp sending
@@ -147,7 +159,7 @@ EOF
 
   # Convert text to RFC-2047 MIME "encoded word" format if it contains non-ASCII chars
   # text
-  # shellcheck disable=SC2317
+  # shellcheck disable=SC2317,SC2329
   _mime_encoded_word() {
     _text="$1"
     # (regex character ranges like [a-z] can be locale-dependent; enumerate ASCII chars to avoid that)
@@ -163,7 +175,7 @@ EOF
 
   # Output current date in RFC-2822 Section 3.3 format as required in email headers
   # (e.g., "Mon, 15 Feb 2021 14:22:01 -0800")
-  # shellcheck disable=SC2317
+  # shellcheck disable=SC2317,SC2329
   _rfc2822_date() {
     # Notes:
     #   - this is deliberately not UTC, because it "SHOULD express local time" per spec
@@ -177,7 +189,7 @@ EOF
 
   # Output an RFC-822 / RFC-5322 email message using SMTP_* variables.
   # (This assumes variables have already been cleaned for use in email headers.)
-  # shellcheck disable=SC2317
+  # shellcheck disable=SC2317,SC2329
   _smtp_raw_message() {
     echo "From: $SMTP_FROM"
     echo "To: $SMTP_TO"
@@ -190,7 +202,7 @@ EOF
   }
 
   # Send the message via curl using SMTP_* variables
-  # shellcheck disable=SC2317
+  # shellcheck disable=SC2317,SC2329
   _smtp_send_curl() {
     # Build curl args in $@
     case "$SMTP_SECURE" in
@@ -206,8 +218,8 @@ EOF
       *)
         # This will only occur if someone adds a new SMTP_SECURE option above
         # without updating this code for it.
-        echo "[Error] Unhandled SMTP_SECURE='$SMTP_SECURE' in _smtp_send_curl" >&2
-        echo "[Error] Please re-run with --debug and report a bug." >&2
+        _err "Unhandled SMTP_SECURE='$SMTP_SECURE' in _smtp_send_curl"
+        _err "Please re-run with DEBUG=1 and report a bug."
         return 1
         ;;
     esac
@@ -238,8 +250,9 @@ EOF
 
     raw_message="$(_smtp_raw_message)"
 
-    #echo "[DEBUG] curl command:" "$SMTP_BIN" "$*"
-    #printf "%s" "[DEBUG] raw_message:\n$raw_message\n"
+    # the arguments include --user with SMTP_PASSWORD
+    _secure_debug2 "curl args" "$*"
+    _debug3 "raw_message" "$raw_message"
 
     echo "$raw_message" | "$SMTP_BIN" "$@"
   }
@@ -249,9 +262,9 @@ EOF
   ##
 
   # Send the message via Python using SMTP_* variables
-  # shellcheck disable=SC2317
+  # shellcheck disable=SC2317,SC2329
   _smtp_send_python() {
-    #echo "[DEBUG] Python version" "$("$SMTP_BIN" --version 2>&1)"
+    _debug "Python version" "$("$SMTP_BIN" --version 2>&1)"
 
     # language=Python
     "$SMTP_BIN" << PYTHON
@@ -332,16 +345,16 @@ PYTHON
     curl) _smtp_send=_smtp_send_curl ;;
     py*) _smtp_send=_smtp_send_python ;;
     *)
-      echo "[Error] Can't figure out how to invoke '$SMTP_BIN'." >&2
-      echo "[Error] Check your SMTP_BIN setting." >&2
+      _err "Can't figure out how to invoke '$SMTP_BIN'."
+      _err "Check your SMTP_BIN setting."
       return 1
       ;;
   esac
 
   if ! smtp_output="$($_smtp_send)"; then
-    echo "[Error] Error sending message with $SMTP_BIN." >&2
+    _err "Error sending message with $SMTP_BIN."
     if [ -n "$smtp_output" ]; then
-      echo "[Error] $smtp_output" >&2
+      _err "$smtp_output"
     fi
     return 1
   fi

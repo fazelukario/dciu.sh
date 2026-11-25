@@ -37,13 +37,52 @@ CHECK_UP_TO_DATE=0
 CHECK_UPDATE_AVAILABLE=1
 CHECK_FAILED=2
 
+# Defaults of the settings (a config may lack a setting or hold an invalid value), each the cautious choice
+# shellcheck disable=SC2034 # read through eval by _init_settings and _container_setting
+DEFAULT_MODE=monitor \
+  DEFAULT_UPDATE_STOPPED=false \
+  DEFAULT_START_STOPPED=false \
+  DEFAULT_PRUNE_DANGLING=false \
+  DEFAULT_UPDATE_COMPOSE=false \
+  DEFAULT_PRIVATE_REPO=false \
+  DEFAULT_COMPOSE_RECREATE=service \
+  DEFAULT_COMPOSE_BUILD=false \
+  DEFAULT_SKIP_IDENTICAL_IMAGES=true \
+  DEFAULT_OUTPUT_INSECURE=false \
+  DEFAULT_NO_TIMESTAMP=false
+
+# The global settings _init_settings checks: name and type of value (see _setting_value)
+_SETTINGS="MODE mode
+UPDATE_STOPPED bool
+START_STOPPED bool
+PRUNE_DANGLING bool
+UPDATE_COMPOSE bool
+PRIVATE_REPO bool
+COMPOSE_RECREATE recreate
+COMPOSE_BUILD bool
+SKIP_IDENTICAL_IMAGES bool
+OUTPUT_INSECURE bool
+NO_TIMESTAMP bool"
+
 # Logging: _info -> stdout, _err and _debug* -> stderr; all of them also go to LOG_FILE
 # (debug lines only up to LOG_LEVEL, which defaults to DEBUG).
 # Except for _err (always returns 1), the helpers return the caller's $? untouched.
 
+# value: 0 when it spells true (1, yes or true in any case, surrounding spaces ignored). Uses only its own variable:
+# it runs in every log line, also between a caller's _setting_value and its use of _sv
+_is_true() {
+  __it="$1"
+  __it="${__it#"${__it%%[![:space:]]*}"}"
+  __it="${__it%"${__it##*[![:space:]]}"}"
+  case "$__it" in
+    1 | [Yy][Ee][Ss] | [Tt][Rr][Uu][Ee]) return 0 ;;
+  esac
+  return 1
+}
+
 _printargs() {
   _exitstatus="$?"
-  if [ -z "$NO_TIMESTAMP" ] || [ "$NO_TIMESTAMP" = "0" ]; then
+  if ! _is_true "$NO_TIMESTAMP"; then
     printf -- "%s" "[$(date '+%Y-%m-%d %H:%M:%S')] "
   fi
   if [ -z "$2" ]; then
@@ -97,9 +136,9 @@ _debug() { __debugn "$?" "$DEBUG_LEVEL_1" "$LOG_LEVEL_1" "$@"; }
 _debug2() { __debugn "$?" "$DEBUG_LEVEL_2" "$LOG_LEVEL_2" "$@"; }
 _debug3() { __debugn "$?" "$DEBUG_LEVEL_3" "$LOG_LEVEL_3" "$@"; }
 
-# status debug_level log_level name value: like __debugn, but the value is hidden unless OUTPUT_INSECURE=1
+# status debug_level log_level name value: like __debugn, but the value is hidden unless OUTPUT_INSECURE is true
 __secure_debugn() {
-  if [ "$OUTPUT_INSECURE" = "1" ]; then
+  if _is_true "$OUTPUT_INSECURE"; then
     __debugn "$@"
   else
     __debugn "$1" "$2" "$3" "$4" "$HIDDEN_VALUE"
@@ -110,12 +149,12 @@ _secure_debug() { __secure_debugn "$?" "$DEBUG_LEVEL_1" "$LOG_LEVEL_1" "$@"; }
 _secure_debug2() { __secure_debugn "$?" "$DEBUG_LEVEL_2" "$LOG_LEVEL_2" "$@"; }
 _secure_debug3() { __secure_debugn "$?" "$DEBUG_LEVEL_3" "$LOG_LEVEL_3" "$@"; }
 
-# text secret: print text with every occurrence of secret replaced by [hidden] (as is with OUTPUT_INSECURE=1)
+# text secret: print text with every occurrence of secret replaced by [hidden] (as is when OUTPUT_INSECURE is true)
 # e.g. for API error pages that echo the request URL, which carries a token
 _hide_secret() {
   __hs_text="$1"
   __hs_secret="$2"
-  if [ -z "$__hs_secret" ] || [ "$OUTPUT_INSECURE" = "1" ]; then
+  if [ -z "$__hs_secret" ] || _is_true "$OUTPUT_INSECURE"; then
     printf "%s" "$__hs_text"
     return
   fi
@@ -171,6 +210,115 @@ _init_log_levels() {
   fi
 }
 
+# type value: check the value of a setting, any case, surrounding spaces and line breaks ignored (no forks).
+# 0: valid, the canonical value in _sv; 1: invalid, _sv is the trimmed value and _sv_must lists the accepted ones;
+# 2: empty. Types: bool (1 yes true -> true, 0 no false -> false), mode (autoupdate monitor none), recreate
+# (service stack)
+_setting_value() {
+  _sv="$2"
+  _sv="${_sv#"${_sv%%[![:space:]]*}"}"
+  _sv="${_sv%"${_sv##*[![:space:]]}"}"
+  if [ -z "$_sv" ]; then
+    return 2
+  fi
+  case "$1" in
+    bool)
+      _sv_must="true, false, yes, no, 1 or 0"
+      case "$_sv" in
+        1 | [Yy][Ee][Ss] | [Tt][Rr][Uu][Ee]) _sv=true ;;
+        0 | [Nn][Oo] | [Ff][Aa][Ll][Ss][Ee]) _sv=false ;;
+        *) return 1 ;;
+      esac
+      ;;
+    mode)
+      _sv_must="autoupdate, monitor or none"
+      case "$_sv" in
+        [Aa][Uu][Tt][Oo][Uu][Pp][Dd][Aa][Tt][Ee]) _sv=autoupdate ;;
+        [Mm][Oo][Nn][Ii][Tt][Oo][Rr]) _sv=monitor ;;
+        [Nn][Oo][Nn][Ee]) _sv=none ;;
+        *) return 1 ;;
+      esac
+      ;;
+    recreate)
+      _sv_must="service or stack"
+      case "$_sv" in
+        [Ss][Ee][Rr][Vv][Ii][Cc][Ee]) _sv=service ;;
+        [Ss][Tt][Aa][Cc][Kk]) _sv=stack ;;
+        *) return 1 ;;
+      esac
+      ;;
+  esac
+}
+
+# Check the global settings once per run (_SETTINGS and NOTIFY_EVENT): an empty one gets its default silently, an
+# invalid one is reported and gets its default; _settings_invalid=1 then (the run ends with exit code 1)
+_init_settings() {
+  _settings_invalid=0
+  while read -r _is_name _is_type; do
+    _is_raw="" _is_default=""
+    eval "_is_raw=\${$_is_name}"
+    eval "_is_default=\$DEFAULT_$_is_name"
+    _setting_value "$_is_type" "$_is_raw"
+    case "$?" in
+      0) eval "$_is_name=\$_sv" ;;
+      2) eval "$_is_name=\$_is_default" ;;
+      *)
+        _err "Invalid $_is_name='$_is_raw' (must be $_sv_must), using '$_is_default'"
+        eval "$_is_name=\$_is_default"
+        _settings_invalid=1
+        ;;
+    esac
+  done << EOF
+$_SETTINGS
+EOF
+
+  # empty: no notifications
+  if [ -z "$NOTIFY_EVENT" ]; then
+    return 0
+  fi
+  _is_rest="$(printf '%s' "$NOTIFY_EVENT" | tr 'A-Z,\t\n' 'a-z   ') "
+  _is_events=""
+  while [ -n "$_is_rest" ]; do
+    _is_event="${_is_rest%% *}"
+    _is_rest="${_is_rest#* }"
+    case "$_is_event" in
+      '') ;;
+      update_available | updated | update_failed | update_skipped | check_failed | all | none)
+        _is_events="${_is_events:+$_is_events }$_is_event"
+        ;;
+      *)
+        _err "Invalid NOTIFY_EVENT name '$_is_event' (must be update_available, updated, update_failed, update_skipped, check_failed, all or none), ignored"
+        _settings_invalid=1
+        ;;
+    esac
+  done
+  NOTIFY_EVENT="$_is_events"
+}
+
+# type NAME label_name label_value: a container's setting in _sv — the label's value, else the global NAME, else
+# DEFAULT_NAME (an invalid global was reported by _init_settings). Returns 1 when the label value is invalid:
+# _cs_value is the trimmed value, _cs_error says what is wrong
+_container_setting() {
+  _cs_value=""
+  _cs_error=""
+  _setting_value "$1" "$4"
+  case "$?" in
+    0) return 0 ;;
+    1)
+      _cs_value="$_sv"
+      _cs_error="$3='$_sv' (must be $_sv_must)"
+      _sv=""
+      return 1
+      ;;
+  esac
+  _cs_global=""
+  eval "_cs_global=\${$2}"
+  if _setting_value "$1" "$_cs_global"; then
+    return 0
+  fi
+  eval "_sv=\$DEFAULT_$2"
+}
+
 # Load configuration
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 CONFIG_FILE="$SCRIPT_DIR/dciu.conf"
@@ -187,12 +335,9 @@ if [ -z "$DEBUG" ]; then DEBUG='0'; fi
 
 if [ -z "$NOTIFY_SOURCE" ]; then NOTIFY_SOURCE="$(hostname -f)"; fi
 
-# settings added after 2.3.0: existing configs don't have them
-if [ -z "$COMPOSE_RECREATE" ]; then COMPOSE_RECREATE='service'; fi
-if [ -z "$COMPOSE_BUILD" ]; then COMPOSE_BUILD='false'; fi
+# labels added after 2.3.0: existing configs don't have them (the settings' defaults are in _init_settings)
 if [ -z "$LABEL_COMPOSE_RECREATE" ]; then LABEL_COMPOSE_RECREATE='dciu.compose-recreate'; fi
 if [ -z "$LABEL_COMPOSE_BUILD" ]; then LABEL_COMPOSE_BUILD='dciu.compose-build'; fi
-if [ -z "$SKIP_IDENTICAL_IMAGES" ]; then SKIP_IDENTICAL_IMAGES='1'; fi
 if [ -z "$LABEL_SKIP_IDENTICAL_IMAGES" ]; then LABEL_SKIP_IDENTICAL_IMAGES='dciu.skip-identical-images'; fi
 
 # helper: check if command exists
@@ -519,10 +664,10 @@ _same_image_content() {
   [ -n "$_sic_a" ] && [ "$_sic_a" = "$_sic_b" ]
 }
 
-# With skip_identical_images=1: 0 when the tag $img points to the container's image $image_id or to an identical one
-# (checked right after a pull)
+# With skip_identical_images=true: 0 when the tag $img points to the container's image $image_id or to an identical
+# one (checked right after a pull)
 _pulled_image_identical() {
-  [ "$skip_identical_images" = "1" ] || return 1
+  [ "$skip_identical_images" = "true" ] || return 1
   _pii_id="$(docker image inspect --format '{{.Id}}' "$img" 2> /dev/null)" || return 1
   [ -n "$_pii_id" ] || return 1
   if [ "$_pii_id" = "$image_id" ]; then
@@ -539,7 +684,7 @@ get_remote_digest() {
   check_error=""
 
   _H1="" _H2="" _H3="" _H4="" _H5=""
-  if [ "$IMAGE_REGISTRY" = "hub.docker.com" ] && [ "$PRIVATE_REPO" != "true" ]; then
+  if [ "$IMAGE_REGISTRY" = "hub.docker.com" ] && [ "$private_repo" != "true" ]; then
     _get_dockerhub_digest
   elif [ "$IMAGE_REGISTRY" = "ghcr.io" ]; then
     _get_ghcr_digest
@@ -603,7 +748,7 @@ _get_ghcr_digest() {
   _require_jq || return 1
   if [ -n "$GITHUB_TOKEN" ]; then
     _H1="Authorization: Basic $(printf '%s' "username:$GITHUB_TOKEN" | _base64)"
-  elif [ "$PRIVATE_REPO" = "true" ]; then
+  elif [ "$private_repo" = "true" ]; then
     check_error="GITHUB_TOKEN must be set for private repository access"
     return 1
   fi
@@ -678,7 +823,7 @@ check_update() {
     check_error="cannot inspect the container's image $image_id"
     return "$CHECK_FAILED"
   fi
-  if [ "$skip_identical_images" = "1" ]; then
+  if [ "$skip_identical_images" = "true" ]; then
     # the tag may point to an image identical to the container's (pulled after a re-publish, the recreate skipped):
     # its digests are the container's too
     _cu_tag_id="$(docker image inspect --format '{{.Id}}' "$img" 2> /dev/null)"
@@ -705,23 +850,25 @@ check_update() {
   return "$CHECK_UPDATE_AVAILABLE"
 }
 
-# Read container cid with one docker inspect: sets name, img, image_id, running, the settings (container
-# label, else global config) and the Swarm/Compose labels.
+# Read container cid with one docker inspect: sets name, img, image_id, running, the settings (container label,
+# else global config, else default; see _container_setting) and the Swarm/Compose labels. An invalid mode label is
+# left in label_error_mode, the other invalid labels in label_errors (label_error_count of them).
 # Returns 1 when docker inspect fails, 2 when a value contains a line break (the output has one value per line).
 _read_container() {
   _rc_cid="$1"
 
-  # one value per line, in the order they are read below; the last line marks a complete, unshifted read
+  # one value per line, in the order they are read below; the last line marks a complete, unshifted read.
+  # dciu's own labels come with their line breaks as spaces (YAML block scalars end with one)
   _rc_format="{{.Name}}
 {{.Config.Image}}
 {{.Image}}
 {{.State.Running}}
-{{index .Config.Labels \"$LABEL_MODE\"}}
-{{index .Config.Labels \"$LABEL_UPDATE_STOPPED\"}}
-{{index .Config.Labels \"$LABEL_START_STOPPED\"}}
-{{index .Config.Labels \"$LABEL_PRUNE_DANGLING\"}}
-{{index .Config.Labels \"$LABEL_UPDATE_COMPOSE\"}}
-{{index .Config.Labels \"$LABEL_PRIVATE_REPO\"}}
+{{join (split (index .Config.Labels \"$LABEL_MODE\") \"\\n\") \" \"}}
+{{join (split (index .Config.Labels \"$LABEL_UPDATE_STOPPED\") \"\\n\") \" \"}}
+{{join (split (index .Config.Labels \"$LABEL_START_STOPPED\") \"\\n\") \" \"}}
+{{join (split (index .Config.Labels \"$LABEL_PRUNE_DANGLING\") \"\\n\") \" \"}}
+{{join (split (index .Config.Labels \"$LABEL_UPDATE_COMPOSE\") \"\\n\") \" \"}}
+{{join (split (index .Config.Labels \"$LABEL_PRIVATE_REPO\") \"\\n\") \" \"}}
 {{index .Config.Labels \"com.docker.stack.namespace\"}}
 {{index .Config.Labels \"com.docker.compose.project\"}}
 {{index .Config.Labels \"com.docker.compose.service\"}}
@@ -729,9 +876,9 @@ _read_container() {
 {{index .Config.Labels \"com.docker.compose.project.working_dir\"}}
 {{index .Config.Labels \"com.docker.compose.project.environment_file\"}}
 {{index .Config.Labels \"com.docker.compose.oneoff\"}}
-{{index .Config.Labels \"$LABEL_COMPOSE_RECREATE\"}}
-{{index .Config.Labels \"$LABEL_COMPOSE_BUILD\"}}
-{{index .Config.Labels \"$LABEL_SKIP_IDENTICAL_IMAGES\"}}
+{{join (split (index .Config.Labels \"$LABEL_COMPOSE_RECREATE\") \"\\n\") \" \"}}
+{{join (split (index .Config.Labels \"$LABEL_COMPOSE_BUILD\") \"\\n\") \" \"}}
+{{join (split (index .Config.Labels \"$LABEL_SKIP_IDENTICAL_IMAGES\") \"\\n\") \" \"}}
 dciu-inspect-end"
   _rc_out="$(docker container inspect --format "$_rc_format" "$_rc_cid" 2> /dev/null)" || return 1
 
@@ -746,7 +893,7 @@ dciu-inspect-end"
     IFS= read -r _rc_start_stopped
     IFS= read -r _rc_prune_dangling
     IFS= read -r _rc_update_compose
-    IFS= read -r PRIVATE_REPO
+    IFS= read -r _rc_private_repo
     IFS= read -r stack_ns
     IFS= read -r compose_project
     IFS= read -r compose_service
@@ -763,17 +910,34 @@ dciu-inspect-end"
   } << EOF
 $_rc_out
 EOF
+  # the name is the first line: never shifted
+  name="${_rc_name#/}"
   if [ "$_rc_end" != "dciu-inspect-end" ]; then
     return 2
   fi
 
-  name="${_rc_name#/}"
-  # container label overrides global config
-  mode="${_rc_mode:-$MODE}"
-  update_stopped="${_rc_update_stopped:-$UPDATE_STOPPED}"
-  start_stopped="${_rc_start_stopped:-$START_STOPPED}"
-  prune_dangling="${_rc_prune_dangling:-$PRUNE_DANGLING}"
-  update_compose="${_rc_update_compose:-$UPDATE_COMPOSE}"
+  label_error_mode=""
+  label_errors=""
+  label_error_count=0
+  if _container_setting mode MODE "$LABEL_MODE" "$_rc_mode"; then
+    mode="$_sv"
+  else
+    # shown as set, e.g. in the check_failed notification
+    mode="$_cs_value"
+    label_error_mode="$_cs_error"
+  fi
+  _rc_setting bool UPDATE_STOPPED "$LABEL_UPDATE_STOPPED" "$_rc_update_stopped"
+  update_stopped="$_sv"
+  _rc_setting bool START_STOPPED "$LABEL_START_STOPPED" "$_rc_start_stopped"
+  start_stopped="$_sv"
+  _rc_setting bool PRUNE_DANGLING "$LABEL_PRUNE_DANGLING" "$_rc_prune_dangling"
+  prune_dangling="$_sv"
+  _rc_setting bool UPDATE_COMPOSE "$LABEL_UPDATE_COMPOSE" "$_rc_update_compose"
+  update_compose="$_sv"
+  _rc_setting bool PRIVATE_REPO "$LABEL_PRIVATE_REPO" "$_rc_private_repo"
+  private_repo="$_sv"
+  _rc_setting bool SKIP_IDENTICAL_IMAGES "$LABEL_SKIP_IDENTICAL_IMAGES" "$_rc_skip_identical"
+  skip_identical_images="$_sv"
 
   _debug "container" "$name ($_rc_cid)"
   _debug "image" "$img"
@@ -782,38 +946,25 @@ EOF
   _debug "start_stopped" "$start_stopped"
   _debug "prune_dangling" "$prune_dangling"
   _debug "update_compose" "$update_compose"
-  _debug "private_repo" "$PRIVATE_REPO"
-
-  skip_identical_images="${_rc_skip_identical:-$SKIP_IDENTICAL_IMAGES}"
-  case "$skip_identical_images" in
-    1 | true) skip_identical_images=1 ;;
-    0 | false) skip_identical_images=0 ;;
-    *)
-      _err "Invalid SKIP_IDENTICAL_IMAGES='$skip_identical_images' for container $name, using '1'"
-      skip_identical_images=1
-      ;;
-  esac
+  _debug "private_repo" "$private_repo"
   _debug "skip_identical_images" "$skip_identical_images"
 
+  # the compose labels only matter (and are only checked) for a Compose container
   if [ -n "$compose_project" ]; then
-    compose_recreate="${_rc_compose_recreate:-$COMPOSE_RECREATE}"
-    case "$compose_recreate" in
-      service | stack) ;;
-      *)
-        _err "Invalid COMPOSE_RECREATE='$compose_recreate' for container $name, using 'service'"
-        compose_recreate="service"
-        ;;
-    esac
-    compose_build="${_rc_compose_build:-$COMPOSE_BUILD}"
-    case "$compose_build" in
-      true | false) ;;
-      *)
-        _err "Invalid COMPOSE_BUILD='$compose_build' for container $name, using 'false'"
-        compose_build="false"
-        ;;
-    esac
+    _rc_setting recreate COMPOSE_RECREATE "$LABEL_COMPOSE_RECREATE" "$_rc_compose_recreate"
+    compose_recreate="$_sv"
+    _rc_setting bool COMPOSE_BUILD "$LABEL_COMPOSE_BUILD" "$_rc_compose_build"
+    compose_build="$_sv"
     _debug "compose_recreate" "$compose_recreate"
     _debug "compose_build" "$compose_build"
+  fi
+}
+
+# type NAME label_name label_value: _container_setting for _read_container, an invalid label added to label_errors
+_rc_setting() {
+  if ! _container_setting "$@"; then
+    label_errors="${label_errors:+$label_errors, }$_cs_error"
+    label_error_count=$((label_error_count + 1))
   fi
 }
 
@@ -1053,7 +1204,12 @@ process_container() {
   case "$?" in
     0) ;;
     2)
-      _err "Cannot read the settings of container $cid: a label value contains a line break"
+      # dciu's own labels can't cause this (their line breaks are read as spaces), Compose's and Swarm's can
+      if [ -n "$name" ]; then
+        _err "Cannot read the settings of container $name ($cid): a label value contains a line break"
+      else
+        _err "Cannot read the settings of container $cid: a label value contains a line break"
+      fi
       return 1
       ;;
     *)
@@ -1066,6 +1222,13 @@ process_container() {
       return 1
       ;;
   esac
+
+  # an invalid mode label: dciu can't tell whether the container may be touched at all
+  if [ -n "$label_error_mode" ]; then
+    check_error="invalid label $label_error_mode"
+    _check_failed
+    return 1
+  fi
 
   # Skip if none mode
   if [ "$mode" = "none" ]; then
@@ -1094,6 +1257,17 @@ process_container() {
       esac
       ;;
   esac
+
+  # the other invalid labels: none of them may silently fall back to a value the label was meant to override
+  if [ -n "$label_errors" ]; then
+    if [ "$label_error_count" -gt 1 ]; then
+      check_error="invalid labels $label_errors"
+    else
+      check_error="invalid label $label_errors"
+    fi
+    _check_failed
+    return 1
+  fi
 
   parse_image "$img"
 
@@ -1155,6 +1329,9 @@ main() {
     _err "Cannot write to LOG_FILE='$_unwritable_log_file', logging to the console only"
   fi
 
+  # after the LOG_FILE check, so an invalid setting is also reported in the log file
+  _init_settings
+
   # One temp file per run for the response headers of _post/_get, never one inherited from the environment.
   # The traps are set before it is created, so the EXIT trap deletes it however the run ends.
   # Without it registry lookups and notifications fail, but every container is still processed.
@@ -1174,8 +1351,9 @@ main() {
   fi
   _init_image_store
 
-  # like acme.sh's cron: 1 when any container's check or update failed (skips and failed notifications don't count)
-  _main_ret=0
+  # like acme.sh's cron: 1 when a setting was invalid or any container's check or update failed (skips and failed
+  # notifications don't count)
+  _main_ret="$_settings_invalid"
   for cid in $cids; do
     if ! (process_container "$cid"); then
       _main_ret=1

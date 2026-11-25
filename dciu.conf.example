@@ -1,4 +1,10 @@
 # dciu.conf - Configuration for Docker Container Image Updater (dciu)
+#
+# Values: settings that are on or off take 'true' or 'false' ('yes'/'no' and '1'/'0' work too), in any case.
+# An invalid value in this file is reported once per run, its default is used and the run ends with exit code 1.
+# Most settings can be set per container with a label (LABEL_* below), which overrides this file; an invalid label
+# value fails that container's update check (check_failed) and dciu leaves the container alone.
+
 # Default Mode: autoupdate, monitor or none
 MODE='monitor'
 
@@ -25,12 +31,15 @@ COMPOSE_BUILD='false'
 
 # A registry can re-publish a tag (new index digest) without changing the image for this platform, e.g. a multi-arch
 # image where only another platform was rebuilt or attestations were added.
-#   '1' (default): after the pull dciu compares the pulled image with the running one (same layers and config =
-#                  identical) and leaves the container alone (update_skipped); later checks treat it as up to date.
-#                  Monitor mode never pulls, so it keeps reporting such a re-publish until the image is pulled.
-#   '0': every pull is followed by a recreate (Watchtower's behaviour)
-# 'true'/'false' work as well
-SKIP_IDENTICAL_IMAGES='1'
+#   'true' (default): after the pull dciu compares the pulled image with the running one (same layers and config =
+#                     identical) and leaves the container alone (update_skipped); later checks treat it as up to
+#                     date. Monitor mode never pulls, so it keeps reporting such a re-publish until the image is pulled.
+#   'false': every pull is followed by a recreate (Watchtower's behaviour)
+SKIP_IDENTICAL_IMAGES='true'
+
+# Images in private repositories: 'true' looks them up with your credentials (GITHUB_TOKEN for ghcr.io, the login of
+# 'docker login' for the other registries), 'false' (default). Per container: LABEL_PRIVATE_REPO below
+PRIVATE_REPO='false'
 
 # Labels for selecting containers
 LABEL_MODE='dciu.mode'
@@ -89,11 +98,11 @@ LOG_FILE="$SCRIPT_DIR/dciu.sh.log"
 #LOG_LEVEL=''
 
 # Secrets (tokens, webhook URLs, passwords) are shown as [hidden] in debug output and LOG_FILE.
-# Set to '1' to show them in clear text - careful, they will end up in LOG_FILE too
-#OUTPUT_INSECURE='0'
+# Set to 'true' to show them in clear text - careful, they will end up in LOG_FILE too
+#OUTPUT_INSECURE='false'
 
-# NO_TIMESTAMP: if set to '1', dciu will not add timestamps to log messages
-#NO_TIMESTAMP='0'
+# NO_TIMESTAMP: if set to 'true', dciu will not add timestamps to log messages
+#NO_TIMESTAMP='false'
 
 # Variables for notify modules must be exported to be available in the notify module scripts (e.g. prefixed with 'export')
 #DISCORD_WEBHOOK_URL='https://discord.com/api/webhooks/some-numbers/some-letters' # Update with actual webhook URL

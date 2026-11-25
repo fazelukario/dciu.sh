@@ -23,6 +23,15 @@ COMPOSE_RECREATE='service'
 # COMPOSE_RECREATE='stack' with COMPOSE_BUILD='true' is the behaviour before dciu.sh 2.4.0
 COMPOSE_BUILD='false'
 
+# A registry can re-publish a tag (new index digest) without changing the image for this platform, e.g. a multi-arch
+# image where only another platform was rebuilt or attestations were added.
+#   '1' (default): after the pull dciu compares the pulled image with the running one (same layers and config =
+#                  identical) and leaves the container alone (update_skipped); later checks treat it as up to date.
+#                  Monitor mode never pulls, so it keeps reporting such a re-publish until the image is pulled.
+#   '0': every pull is followed by a recreate (Watchtower's behaviour)
+# 'true'/'false' work as well
+SKIP_IDENTICAL_IMAGES='1'
+
 # Labels for selecting containers
 LABEL_MODE='dciu.mode'
 # Labels to override stopped containers behavior
@@ -35,6 +44,8 @@ LABEL_UPDATE_COMPOSE='dciu.update-compose'
 # Labels to override COMPOSE_RECREATE and COMPOSE_BUILD per container (for a whole stack: set them on each of its services)
 LABEL_COMPOSE_RECREATE='dciu.compose-recreate'
 LABEL_COMPOSE_BUILD='dciu.compose-build'
+# Label to override SKIP_IDENTICAL_IMAGES per container (for a whole stack: set it on each of its services)
+LABEL_SKIP_IDENTICAL_IMAGES='dciu.skip-identical-images'
 # Label to tell dciu that container image in private repository
 # NOTE: For images in Docker Hub's private repositories supported only those that use pure Manifest V2 format
 # (e.g. "application/vnd.docker.distribution.manifest.v2+json")

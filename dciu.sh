@@ -171,6 +171,8 @@ if [ -z "$COMPOSE_RECREATE" ]; then COMPOSE_RECREATE='service'; fi
 if [ -z "$COMPOSE_BUILD" ]; then COMPOSE_BUILD='false'; fi
 if [ -z "$LABEL_COMPOSE_RECREATE" ]; then LABEL_COMPOSE_RECREATE='dciu.compose-recreate'; fi
 if [ -z "$LABEL_COMPOSE_BUILD" ]; then LABEL_COMPOSE_BUILD='dciu.compose-build'; fi
+if [ -z "$SKIP_IDENTICAL_IMAGES" ]; then SKIP_IDENTICAL_IMAGES='1'; fi
+if [ -z "$LABEL_SKIP_IDENTICAL_IMAGES" ]; then LABEL_SKIP_IDENTICAL_IMAGES='dciu.skip-identical-images'; fi
 
 # helper: check if command exists
 _exists() {
@@ -488,6 +490,26 @@ get_local_digests() {
   _add_image_digests "$1"
 }
 
+# image image: 0 when both images have the same layers and config, e.g. after a registry re-published a tag (new
+# index digest) without changing the image for this platform
+_same_image_content() {
+  _sic_a="$(docker image inspect --format '{{json .RootFS.Layers}}{{json .Config}}' "$1" 2> /dev/null)" || return 1
+  _sic_b="$(docker image inspect --format '{{json .RootFS.Layers}}{{json .Config}}' "$2" 2> /dev/null)" || return 1
+  [ -n "$_sic_a" ] && [ "$_sic_a" = "$_sic_b" ]
+}
+
+# With skip_identical_images=1: 0 when the tag $img points to the container's image $image_id or to an identical one
+# (checked right after a pull)
+_pulled_image_identical() {
+  [ "$skip_identical_images" = "1" ] || return 1
+  _pii_id="$(docker image inspect --format '{{.Id}}' "$img" 2> /dev/null)" || return 1
+  [ -n "$_pii_id" ] || return 1
+  if [ "$_pii_id" = "$image_id" ]; then
+    return 0
+  fi
+  _same_image_content "$image_id" "$_pii_id"
+}
+
 # Get the remote digest of img without pulling: sets remote_digest (hex) and returns 0, or sets check_error
 # (the reason, one line) and returns 1. Headers set for these requests are cleared before and after.
 get_remote_digest() {
@@ -624,6 +646,14 @@ check_update() {
     check_error="cannot inspect the container's image $image_id"
     return "$CHECK_FAILED"
   fi
+  if [ "$skip_identical_images" = "1" ]; then
+    # the tag may point to an image identical to the container's (pulled after a re-publish, the recreate skipped):
+    # its digests are the container's too
+    _cu_tag_id="$(docker image inspect --format '{{.Id}}' "$img" 2> /dev/null)"
+    if [ -n "$_cu_tag_id" ] && [ "$_cu_tag_id" != "$image_id" ] && _same_image_content "$image_id" "$_cu_tag_id"; then
+      _add_image_digests "$_cu_tag_id"
+    fi
+  fi
   _debug "local_digests" "$local_digests"
   if [ -z "$local_digests" ]; then
     check_error="the image has no registry digest (built or loaded locally?), set the label $LABEL_MODE=none to skip this container"
@@ -668,6 +698,7 @@ _read_container() {
 {{index .Config.Labels \"com.docker.compose.project.environment_file\"}}
 {{index .Config.Labels \"$LABEL_COMPOSE_RECREATE\"}}
 {{index .Config.Labels \"$LABEL_COMPOSE_BUILD\"}}
+{{index .Config.Labels \"$LABEL_SKIP_IDENTICAL_IMAGES\"}}
 dciu-inspect-end"
   _rc_out="$(docker container inspect --format "$_rc_format" "$_rc_cid" 2> /dev/null)" || return 1
 
@@ -691,6 +722,7 @@ dciu-inspect-end"
     IFS= read -r compose_env_files
     IFS= read -r _rc_compose_recreate
     IFS= read -r _rc_compose_build
+    IFS= read -r _rc_skip_identical
     IFS= read -r _rc_end
     # a line break in a value shifts every later line: nothing may follow the end marker
     if IFS= read -r _rc_more; then _rc_end=""; fi
@@ -717,6 +749,17 @@ EOF
   _debug "prune_dangling" "$prune_dangling"
   _debug "update_compose" "$update_compose"
   _debug "private_repo" "$PRIVATE_REPO"
+
+  skip_identical_images="${_rc_skip_identical:-$SKIP_IDENTICAL_IMAGES}"
+  case "$skip_identical_images" in
+    1 | true) skip_identical_images=1 ;;
+    0 | false) skip_identical_images=0 ;;
+    *)
+      _err "Invalid SKIP_IDENTICAL_IMAGES='$skip_identical_images' for container $name, using '1'"
+      skip_identical_images=1
+      ;;
+  esac
+  _debug "skip_identical_images" "$skip_identical_images"
 
   if [ -n "$compose_project" ]; then
     compose_recreate="${_rc_compose_recreate:-$COMPOSE_RECREATE}"
@@ -849,6 +892,11 @@ _update_compose_service() {
   fi
   _info "Successfully updated image $img for container $_ucs_ctr"
 
+  if _pulled_image_identical; then
+    _update_skipped "Skipping container $name ($img): the pulled image is identical to the running one (the registry re-published the tag without changes)"
+    return 0
+  fi
+
   _ucs_start=""
   if [ "$running" = "true" ] || [ "$start_stopped" = "true" ]; then
     _ucs_start=1
@@ -898,6 +946,11 @@ _update_cmd_script() {
     return 1
   fi
   _info "Successfully pulled image $img for container $name"
+
+  if _pulled_image_identical; then
+    _update_skipped "Skipping container $name ($img): the pulled image is identical to the running one (the registry re-published the tag without changes)"
+    return 0
+  fi
 
   # Stop and remove container
   if ! docker stop "$cid"; then

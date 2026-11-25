@@ -792,11 +792,11 @@ _same_image_content() {
   [ -n "$_sic_a" ] && [ "$_sic_a" = "$_sic_b" ]
 }
 
-# With skip_identical_images=true: 0 when the tag $img points to the container's image $image_id or to an identical
-# one (checked right after a pull)
+# [image]: with skip_identical_images=true, 0 when image (default $img, the container's tag) points to the container's
+# image $image_id or to an identical one (checked right after a pull)
 _pulled_image_identical() {
   [ "$skip_identical_images" = "true" ] || return 1
-  _pii_id="$(docker image inspect --format '{{.Id}}' "$img" 2> /dev/null)" || return 1
+  _pii_id="$(docker image inspect --format '{{.Id}}' "${1:-$img}" 2> /dev/null)" || return 1
   [ -n "$_pii_id" ] || return 1
   if [ "$_pii_id" = "$image_id" ]; then
     return 0
@@ -1266,6 +1266,11 @@ _update_skipped() {
   return 0
 }
 
+# image: the pulled image is identical to the running one, so the container is left alone; returns 0
+_identical_skipped() {
+  _update_skipped "Skipping container $name ($1): the pulled image is identical to the running one (the registry re-published the tag without changes)"
+}
+
 # msg: notify the finished update and prune dangling images if enabled; returns 1 only when the prune failed
 _finish_update() {
   _notify_container updated "$1"
@@ -1353,10 +1358,16 @@ _update_compose_service() {
     _update_failed "Error pulling image $img for container $_ucs_ctr"
     return 1
   fi
-  _info "Successfully updated image $img for container $_ucs_ctr"
+  # the image the Compose file names now: when its image: changed after the container was created, the pull fetched
+  # that one, not the container's tag (the container's own image name when compose can't say)
+  _ucs_image="$(_compose config --images "$compose_service" 2> /dev/null | head -n 1)"
+  if [ -z "$_ucs_image" ]; then
+    _ucs_image="$img"
+  fi
+  _info "Successfully updated image $_ucs_image for container $_ucs_ctr"
 
-  if _pulled_image_identical; then
-    _update_skipped "Skipping container $name ($img): the pulled image is identical to the running one (the registry re-published the tag without changes)"
+  if _pulled_image_identical "$_ucs_image"; then
+    _identical_skipped "$_ucs_image"
     return 0
   fi
 
@@ -1423,7 +1434,7 @@ _update_cmd_script() {
   _info "Successfully pulled image $img for container $name"
 
   if _pulled_image_identical; then
-    _update_skipped "Skipping container $name ($img): the pulled image is identical to the running one (the registry re-published the tag without changes)"
+    _identical_skipped "$img"
     return 0
   fi
 

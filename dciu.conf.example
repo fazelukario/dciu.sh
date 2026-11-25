@@ -23,7 +23,8 @@ UPDATE_COMPOSE='false'
 #   'service' (default): only that service ('up --no-deps --force-recreate <service>'), its depends_on services are left alone
 #   'stack': every service of the project ('up --force-recreate'), all of them started when the updated container was
 #            running (or START_STOPPED='true'); the other containers of the project are recreated too, so with several
-#            pending updates in one project dciu updates one per run
+#            pending updates in one project dciu updates one per run. A stopped updated container with
+#            START_STOPPED='false' recreates the whole project without starting it, so its running services stop too
 COMPOSE_RECREATE='service'
 # Rebuild services that have a build: section when recreating them ('up --build'): 'false' (default) or 'true'
 # COMPOSE_RECREATE='stack' with COMPOSE_BUILD='true' is the behaviour before dciu.sh 2.4.0

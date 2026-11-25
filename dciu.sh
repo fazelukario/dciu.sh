@@ -36,6 +36,7 @@ HIDDEN_VALUE="[hidden](set OUTPUT_INSECURE=1 to see this value)"
 CHECK_UP_TO_DATE=0
 CHECK_UPDATE_AVAILABLE=1
 CHECK_FAILED=2
+CHECK_LOCAL_IMAGE=3
 
 # Defaults of the settings (a config may lack a setting or hold an invalid value), each the cautious choice
 # shellcheck disable=SC2034 # read through eval by _init_settings and _container_setting
@@ -48,6 +49,7 @@ DEFAULT_MODE=monitor \
   DEFAULT_COMPOSE_RECREATE=service \
   DEFAULT_COMPOSE_BUILD=false \
   DEFAULT_SKIP_IDENTICAL_IMAGES=true \
+  DEFAULT_SKIP_LOCAL_IMAGES=true \
   DEFAULT_OUTPUT_INSECURE=false \
   DEFAULT_NO_TIMESTAMP=false
 
@@ -61,6 +63,7 @@ PRIVATE_REPO bool
 COMPOSE_RECREATE recreate
 COMPOSE_BUILD bool
 SKIP_IDENTICAL_IMAGES bool
+SKIP_LOCAL_IMAGES bool
 OUTPUT_INSECURE bool
 NO_TIMESTAMP bool"
 
@@ -339,6 +342,7 @@ if [ -z "$NOTIFY_SOURCE" ]; then NOTIFY_SOURCE="$(hostname -f)"; fi
 if [ -z "$LABEL_COMPOSE_RECREATE" ]; then LABEL_COMPOSE_RECREATE='dciu.compose-recreate'; fi
 if [ -z "$LABEL_COMPOSE_BUILD" ]; then LABEL_COMPOSE_BUILD='dciu.compose-build'; fi
 if [ -z "$LABEL_SKIP_IDENTICAL_IMAGES" ]; then LABEL_SKIP_IDENTICAL_IMAGES='dciu.skip-identical-images'; fi
+if [ -z "$LABEL_SKIP_LOCAL_IMAGES" ]; then LABEL_SKIP_LOCAL_IMAGES='dciu.skip-local-images'; fi
 
 # helper: check if command exists
 _exists() {
@@ -622,12 +626,59 @@ parse_image() {
 # Detect the image store once per run (IMAGE_STORE): on the containerd image store (Docker Desktop, fresh
 # Docker 29 installs) an image ID is the digest of the pulled index/manifest; on the classic store
 # (graph drivers) it is the digest of the image config. Unknown counts as classic.
+# On the containerd store also IMAGE_IDENTITY=1 when images show their pull record (Identity, Engine API 1.53): a CLI
+# speaking an older API (an older daemon, a pinned DOCKER_API_VERSION) shows none for every image, pulled ones too.
 _init_image_store() {
   IMAGE_STORE="classic"
+  IMAGE_IDENTITY=""
   case "$(docker info --format '{{json .DriverStatus}}' 2> /dev/null)" in
     *io.containerd.snapshotter*) IMAGE_STORE="containerd" ;;
   esac
   _debug "IMAGE_STORE" "$IMAGE_STORE"
+  if [ "$IMAGE_STORE" != "containerd" ]; then
+    return 0
+  fi
+  _iis_api="$(docker version --format '{{.Client.APIVersion}} {{.Server.APIVersion}}' 2> /dev/null)"
+  _debug "API_VERSION" "$_iis_api"
+  if _api_at_least "${_iis_api%% *}" 1 53 && _api_at_least "${_iis_api#* }" 1 53; then
+    IMAGE_IDENTITY=1
+  fi
+  _debug "IMAGE_IDENTITY" "$IMAGE_IDENTITY"
+}
+
+# version major minor: 0 when the API version (M.m) is at least major.minor
+_api_at_least() {
+  case "$1" in
+    [0-9]*.[0-9]*) ;;
+    *) return 1 ;;
+  esac
+  _aal_major="${1%%.*}"
+  _aal_minor="${1#*.}"
+  case "$_aal_major$_aal_minor" in
+    *[!0-9]*) return 1 ;;
+  esac
+  [ "$_aal_major" -gt "$2" ] 2> /dev/null || { [ "$_aal_major" -eq "$2" ] && [ "$_aal_minor" -ge "$3" ]; } 2> /dev/null
+}
+
+# image ID: 0 when the image was built, loaded or imported on this host, not pulled from a registry. Classic store: it
+# has no RepoDigests (a pull and a push record one). containerd store with IMAGE_IDENTITY: its Identity has no Pull
+# entry ("Pull":[{ only appears there: label values are strings, their quotes escaped). 1 otherwise, also when it
+# can't be told (containerd without IMAGE_IDENTITY) or the inspect fails
+_image_is_local() {
+  if [ "$IMAGE_STORE" = "containerd" ]; then
+    [ "$IMAGE_IDENTITY" = 1 ] || return 1
+    _iil_json="$(docker image inspect --format '{{json .}}' "$1" 2> /dev/null)" || return 1
+    [ -n "$_iil_json" ] || return 1
+    case "$_iil_json" in
+      *'"Pull":[{'*) return 1 ;;
+    esac
+    return 0
+  fi
+  _iil_refs="$(docker image inspect --format '{{range .RepoDigests}}{{.}} {{end}}' "$1" 2> /dev/null)" || return 1
+  case "$_iil_refs" in
+    *[![:space:]]*) return 1 ;;
+  esac
+  return 0
 }
 
 # image: append the hex digests of image to local_digests (space-separated, no duplicates): every RepoDigest
@@ -813,27 +864,45 @@ _get_manifest_digest() {
 
 # Check if an update is available for $img, run by the container's image $image_id: sets old_digest (the first
 # local digest) and new_digest (prints nothing); the image is up to date when new_digest is any of its digests.
-# Returns CHECK_UP_TO_DATE, CHECK_UPDATE_AVAILABLE or CHECK_FAILED (check_error says why)
+# Returns CHECK_UP_TO_DATE, CHECK_UPDATE_AVAILABLE, CHECK_FAILED (check_error says why) or, with
+# skip_local_images=true, CHECK_LOCAL_IMAGE (local_reason says why)
 check_update() {
   old_digest=""
   new_digest=""
   check_error=""
+  local_reason=""
 
   if ! get_local_digests "$image_id"; then
     check_error="cannot inspect the container's image $image_id"
     return "$CHECK_FAILED"
   fi
-  if [ "$skip_identical_images" = "true" ]; then
+  # built or loaded here: nothing on a registry to compare with (classic store: the RepoDigests just read)
+  if [ "$skip_local_images" = "true" ]; then
+    if { [ "$IMAGE_STORE" = "containerd" ] && _image_is_local "$image_id"; } ||
+      { [ "$IMAGE_STORE" != "containerd" ] && [ -z "$local_digests" ]; }; then
+      local_reason="the image was built or loaded locally, not pulled from a registry"
+      return "$CHECK_LOCAL_IMAGE"
+    fi
+  fi
+  _cu_tag_id=""
+  if [ "$skip_identical_images" = "true" ] || [ "$skip_local_images" = "true" ]; then
+    _cu_tag_id="$(docker image inspect --format '{{.Id}}' "$img" 2> /dev/null)"
+  fi
+  if [ -n "$_cu_tag_id" ] && [ "$_cu_tag_id" != "$image_id" ]; then
+    # a local build tagged over the container's tag: a pull would take the tag away from it
+    if [ "$skip_local_images" = "true" ] && _image_is_local "$_cu_tag_id"; then
+      local_reason="the tag $img now points to an image built or loaded locally"
+      return "$CHECK_LOCAL_IMAGE"
+    fi
     # the tag may point to an image identical to the container's (pulled after a re-publish, the recreate skipped):
     # its digests are the container's too
-    _cu_tag_id="$(docker image inspect --format '{{.Id}}' "$img" 2> /dev/null)"
-    if [ -n "$_cu_tag_id" ] && [ "$_cu_tag_id" != "$image_id" ] && _same_image_content "$image_id" "$_cu_tag_id"; then
+    if [ "$skip_identical_images" = "true" ] && _same_image_content "$image_id" "$_cu_tag_id"; then
       _add_image_digests "$_cu_tag_id"
     fi
   fi
   _debug "local_digests" "$local_digests"
   if [ -z "$local_digests" ]; then
-    check_error="the image has no registry digest (built or loaded locally?), set the label $LABEL_MODE=none to skip this container"
+    check_error="the image has no registry digest (built or loaded locally?), set the label $LABEL_SKIP_LOCAL_IMAGES=true or $LABEL_MODE=none to skip this container"
     return "$CHECK_FAILED"
   fi
   old_digest="${local_digests%% *}"
@@ -879,6 +948,7 @@ _read_container() {
 {{join (split (index .Config.Labels \"$LABEL_COMPOSE_RECREATE\") \"\\n\") \" \"}}
 {{join (split (index .Config.Labels \"$LABEL_COMPOSE_BUILD\") \"\\n\") \" \"}}
 {{join (split (index .Config.Labels \"$LABEL_SKIP_IDENTICAL_IMAGES\") \"\\n\") \" \"}}
+{{join (split (index .Config.Labels \"$LABEL_SKIP_LOCAL_IMAGES\") \"\\n\") \" \"}}
 dciu-inspect-end"
   _rc_out="$(docker container inspect --format "$_rc_format" "$_rc_cid" 2> /dev/null)" || return 1
 
@@ -904,6 +974,7 @@ dciu-inspect-end"
     IFS= read -r _rc_compose_recreate
     IFS= read -r _rc_compose_build
     IFS= read -r _rc_skip_identical
+    IFS= read -r _rc_skip_local
     IFS= read -r _rc_end
     # a line break in a value shifts every later line: nothing may follow the end marker
     if IFS= read -r _rc_more; then _rc_end=""; fi
@@ -938,6 +1009,8 @@ EOF
   private_repo="$_sv"
   _rc_setting bool SKIP_IDENTICAL_IMAGES "$LABEL_SKIP_IDENTICAL_IMAGES" "$_rc_skip_identical"
   skip_identical_images="$_sv"
+  _rc_setting bool SKIP_LOCAL_IMAGES "$LABEL_SKIP_LOCAL_IMAGES" "$_rc_skip_local"
+  skip_local_images="$_sv"
 
   _debug "container" "$name ($_rc_cid)"
   _debug "image" "$img"
@@ -948,6 +1021,7 @@ EOF
   _debug "update_compose" "$update_compose"
   _debug "private_repo" "$private_repo"
   _debug "skip_identical_images" "$skip_identical_images"
+  _debug "skip_local_images" "$skip_local_images"
 
   # the compose labels only matter (and are only checked) for a Compose container
   if [ -n "$compose_project" ]; then
@@ -1277,6 +1351,10 @@ process_container() {
   if [ "$_pc_check" = "$CHECK_FAILED" ]; then
     _check_failed
     return 1
+  fi
+  if [ "$_pc_check" = "$CHECK_LOCAL_IMAGE" ]; then
+    _info "Skipping container $name ($img): $local_reason"
+    return 0
   fi
   if [ "$_pc_check" != "$CHECK_UPDATE_AVAILABLE" ]; then
     _info "No update for $name ($img)"

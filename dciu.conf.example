@@ -37,6 +37,17 @@ COMPOSE_BUILD='false'
 #   'false': every pull is followed by a recreate (Watchtower's behaviour)
 SKIP_IDENTICAL_IMAGES='true'
 
+# Containers whose image was built or loaded on this host (docker build, load, import or commit) have nothing to
+# compare with a registry:
+#   'true' (default): they are skipped with an info line (no notification, no effect on the exit code)
+#   'false': they are checked like the others (the behaviour before 2.5.0): on the classic image store their check
+#            fails (no registry digest), on the containerd store they are looked up on the registry by their name
+# Local means: classic image store - the image has no registry digest; containerd image store - the image has no pull
+# record (Docker 29 or later: API 1.53 for both the CLI and the daemon; with an older Docker no image counts as
+# local there). An image built here and pushed to a registry counts as pulled. A container whose tag now points to a
+# local build (built after the container was created) is skipped too: a pull would take the tag away from the build.
+SKIP_LOCAL_IMAGES='true'
+
 # Images in private repositories: 'true' looks them up with your credentials (GITHUB_TOKEN for ghcr.io, the login of
 # 'docker login' for the other registries), 'false' (default). Per container: LABEL_PRIVATE_REPO below
 PRIVATE_REPO='false'
@@ -55,6 +66,8 @@ LABEL_COMPOSE_RECREATE='dciu.compose-recreate'
 LABEL_COMPOSE_BUILD='dciu.compose-build'
 # Label to override SKIP_IDENTICAL_IMAGES per container (for a whole stack: set it on each of its services)
 LABEL_SKIP_IDENTICAL_IMAGES='dciu.skip-identical-images'
+# Label to override SKIP_LOCAL_IMAGES per container
+LABEL_SKIP_LOCAL_IMAGES='dciu.skip-local-images'
 # Label to tell dciu that container image in private repository
 # NOTE: For images in Docker Hub's private repositories supported only those that use pure Manifest V2 format
 # (e.g. "application/vnd.docker.distribution.manifest.v2+json")

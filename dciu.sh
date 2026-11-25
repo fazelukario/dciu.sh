@@ -552,8 +552,18 @@ get_remote_digest() {
   return "$_grd_ret"
 }
 
+# the Docker Hub and ghcr.io responses are read with jq: without it every lookup would look like a registry problem
+_require_jq() {
+  if _exists jq; then
+    return 0
+  fi
+  check_error="jq not found (required for Docker Hub and ghcr.io lookups)"
+  return 1
+}
+
 # Docker Hub tags API: the digest of the tag (its index, or its manifest for single-platform images)
 _get_dockerhub_digest() {
+  _require_jq || return 1
   _gdd_body="$(_get "https://${IMAGE_REGISTRY_API}/v2/namespaces/${IMAGE_NAMESPACE}/repositories/${IMAGE_REPOSITORY}/tags/${IMAGE_TAG}")"
   _gdd_ret="$?"
   if [ "$_gdd_ret" != "0" ]; then
@@ -591,6 +601,7 @@ _get_dockerhub_digest() {
 # ghcr.io: a pull token (anonymous, or with GITHUB_TOKEN), then the Docker-Content-Digest of the tag's manifest,
 # requested with every type docker itself accepts (multi-arch images are an index)
 _get_ghcr_digest() {
+  _require_jq || return 1
   if [ -n "$GITHUB_TOKEN" ]; then
     _H1="Authorization: Basic $(printf '%s' "username:$GITHUB_TOKEN" | _base64)"
   elif [ "$PRIVATE_REPO" = "true" ]; then

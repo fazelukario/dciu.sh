@@ -565,23 +565,40 @@ _lock() {
     sleep 1
     _lk_pid="$(cat "$LOCK_FILE/pid" 2> /dev/null)"
   fi
-  if _pid_alive "$_lk_pid"; then
+  if [ "$_lk_pid" = "$$" ]; then
+    # left by an earlier run that had this PID, e.g. PID 1 in a restarted container whose /tmp survived
+    _info "Removing the stale lock $LOCK_FILE (it holds this run's own PID $$, left by an earlier run)"
+  elif _pid_alive "$_lk_pid"; then
     _err "Another dciu.sh run (PID $_lk_pid) holds the lock $LOCK_FILE"
     return 1
-  fi
-  if [ -n "$_lk_pid" ]; then
+  elif [ -n "$_lk_pid" ]; then
     _info "Removing the stale lock $LOCK_FILE (PID $_lk_pid is not running)"
   else
     _info "Removing the stale lock $LOCK_FILE (no PID in it)"
   fi
-  rm -f "$LOCK_FILE/pid"
-  rmdir "$LOCK_FILE" 2> /dev/null
-  # another run may have taken the stale lock first
-  if mkdir "$LOCK_FILE" 2> /dev/null; then
-    _lock_own
-    return
+  # removed only while it still holds what was read: another run may have taken it over meanwhile
+  if [ "$(cat "$LOCK_FILE/pid" 2> /dev/null)" = "$_lk_pid" ]; then
+    rm -f "$LOCK_FILE/pid"
+    rmdir "$LOCK_FILE" 2> /dev/null
   fi
-  _err "Cannot create the lock LOCK_FILE='$LOCK_FILE'"
+  if mkdir "$LOCK_FILE" 2> /dev/null; then
+    _lock_own || return 1
+    # two runs taking over the same stale lock at once: the later removal wins, the run whose PID is no longer in
+    # the lock a moment later backs off
+    sleep 1
+    _lk_pid="$(cat "$LOCK_FILE/pid" 2> /dev/null)"
+    if [ "$_lk_pid" = "$$" ]; then
+      return 0
+    fi
+    _lock_owned=""
+  else
+    _lk_pid="$(cat "$LOCK_FILE/pid" 2> /dev/null)"
+  fi
+  if [ -n "$_lk_pid" ] && [ "$_lk_pid" != "$$" ] && _pid_alive "$_lk_pid"; then
+    _err "Another dciu.sh run (PID $_lk_pid) holds the lock $LOCK_FILE"
+  else
+    _err "Cannot create the lock LOCK_FILE='$LOCK_FILE'"
+  fi
   return 1
 }
 
@@ -1579,6 +1596,9 @@ process_container() {
       ;;
   esac
 
+  # before any notification: the notify modules link to IMAGE_REGISTRY_URL (only parameter expansion, no lookups)
+  parse_image "$img"
+
   # an invalid mode label: dciu can't tell whether the container may be touched at all
   if [ -n "$label_error_mode" ]; then
     check_error="invalid label $label_error_mode"
@@ -1624,8 +1644,6 @@ process_container() {
     _check_failed
     return 1
   fi
-
-  parse_image "$img"
 
   # Check for update
   check_update

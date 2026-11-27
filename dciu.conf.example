@@ -1,4 +1,15 @@
 # dciu.conf - Configuration for Docker Container Image Updater (dciu)
+#
+# Values: settings that are on or off take 'true' or 'false' ('yes'/'no' and '1'/'0' work too), in any case.
+# An invalid value in this file is reported once per run, its default is used and the run ends with exit code 1.
+# Most settings can be set per container with a label (LABEL_* below), which overrides this file; an invalid label
+# value fails that container's update check (check_failed) and dciu leaves the container alone.
+#
+# Exit code: 0, or 1 when a container's check or update failed, a setting or label was invalid, docker ps failed or
+# another run holds the lock (LOCK_FILE). Skipped containers and failed notifications don't count.
+# Containers whose image is pinned to a digest (image@sha256:...) or given as an image ID are skipped: there is no
+# newer image for them.
+
 # Default Mode: autoupdate, monitor or none
 MODE='monitor'
 
@@ -17,7 +28,8 @@ UPDATE_COMPOSE='false'
 #   'service' (default): only that service ('up --no-deps --force-recreate <service>'), its depends_on services are left alone
 #   'stack': every service of the project ('up --force-recreate'), all of them started when the updated container was
 #            running (or START_STOPPED='true'); the other containers of the project are recreated too, so with several
-#            pending updates in one project dciu updates one per run
+#            pending updates in one project dciu updates one per run. A stopped updated container with
+#            START_STOPPED='false' recreates the whole project without starting it, so its running services stop too
 COMPOSE_RECREATE='service'
 # Rebuild services that have a build: section when recreating them ('up --build'): 'false' (default) or 'true'
 # COMPOSE_RECREATE='stack' with COMPOSE_BUILD='true' is the behaviour before dciu.sh 2.4.0
@@ -25,12 +37,30 @@ COMPOSE_BUILD='false'
 
 # A registry can re-publish a tag (new index digest) without changing the image for this platform, e.g. a multi-arch
 # image where only another platform was rebuilt or attestations were added.
-#   '1' (default): after the pull dciu compares the pulled image with the running one (same layers and config =
-#                  identical) and leaves the container alone (update_skipped); later checks treat it as up to date.
-#                  Monitor mode never pulls, so it keeps reporting such a re-publish until the image is pulled.
-#   '0': every pull is followed by a recreate (Watchtower's behaviour)
-# 'true'/'false' work as well
-SKIP_IDENTICAL_IMAGES='1'
+#   'true' (default): after the pull dciu compares the pulled image with the running one (same layers and config =
+#                     identical) and leaves the container alone (update_skipped); later checks treat it as up to
+#                     date. Monitor mode never pulls, so it keeps reporting such a re-publish until the image is pulled.
+#   'false': every pull is followed by a recreate (Watchtower's behaviour)
+SKIP_IDENTICAL_IMAGES='true'
+
+# Containers whose image was built or loaded on this host (docker build, load, import or commit) have nothing to
+# compare with a registry:
+#   'true' (default): they are skipped with an info line (no notification, no effect on the exit code)
+#   'false': they are checked like the others (the behaviour before 2.5.0): on the classic image store their check
+#            fails (no registry digest), on the containerd store they are looked up on the registry by their name
+# Local means: classic image store - the image has no registry digest; containerd image store - the image has no pull
+# record (Docker 29 or later: API 1.53 for both the CLI and the daemon; with an older Docker no image counts as
+# local there). An image built here and pushed to a registry counts as pulled. A container whose tag now points to a
+# local build (built after the container was created) is skipped too: a pull would take the tag away from the build.
+SKIP_LOCAL_IMAGES='true'
+
+# Images in private repositories: 'true' looks them up with your credentials (GITHUB_TOKEN for ghcr.io, the login of
+# 'docker login' for the other registries), 'false' (default). Per container: LABEL_PRIVATE_REPO below
+PRIVATE_REPO='false'
+
+# Time limit in seconds for each registry lookup and notification request, '0' = no limit (default '30'). Pulls and
+# Docker Compose commands have none: they can take long. Per container: LABEL_HTTP_TIMEOUT below
+HTTP_TIMEOUT='30'
 
 # Labels for selecting containers
 LABEL_MODE='dciu.mode'
@@ -46,14 +76,18 @@ LABEL_COMPOSE_RECREATE='dciu.compose-recreate'
 LABEL_COMPOSE_BUILD='dciu.compose-build'
 # Label to override SKIP_IDENTICAL_IMAGES per container (for a whole stack: set it on each of its services)
 LABEL_SKIP_IDENTICAL_IMAGES='dciu.skip-identical-images'
-# Label to tell dciu that container image in private repository
-# NOTE: For images in Docker Hub's private repositories supported only those that use pure Manifest V2 format
-# (e.g. "application/vnd.docker.distribution.manifest.v2+json")
-# You can check if image supported by running the following command on the latest image and comparing the output:
-# 1: docker inspect --format '{{index .RepoDigests 0}}' "$img" 2> /dev/null | awk -F'@' '{print $2}' | awk -F':' '{print $2}'
-# 2: printf "%s" "$(docker manifest inspect "$img" 2> /dev/null)" | sha256sum | awk '{print substr($1, 1, 64)}'
-# If the output of the commands is equal, then the image is supported by dciu
-# ghcr.io private repositories are supported if you provide a GitHub token with read:packages scope
+# Label to override SKIP_LOCAL_IMAGES per container
+LABEL_SKIP_LOCAL_IMAGES='dciu.skip-local-images'
+# Label to override HTTP_TIMEOUT per container (its registry lookups and notifications)
+LABEL_HTTP_TIMEOUT='dciu.http-timeout'
+# Label to override PRIVATE_REPO per container (the image is in a private repository)
+# Docker Hub private repositories and registries other than Docker Hub and ghcr.io are looked up with
+# 'docker manifest inspect', using the credentials of 'docker login'. A single-platform image is compared exactly; a
+# multi-platform image only when its list was pushed with 'docker manifest push', otherwise it shows an update on every
+# run (support for these registries is a TODO). Registries the Docker daemon treats as insecure (localhost,
+# 127.0.0.0/8, ::1 and its insecure-registries listed by name) are contacted with --insecure; one that is insecure
+# only through a CIDR in insecure-registries isn't detected: list it there by name.
+# ghcr.io private repositories need GITHUB_TOKEN (read:packages scope)
 LABEL_PRIVATE_REPO='dciu.private-repo'
 
 # Notify module name (script in notify/ directory)
@@ -78,6 +112,11 @@ NOTIFY_EVENT='update_available,updated,update_failed,check_failed'
 # Log file path
 LOG_FILE="$SCRIPT_DIR/dciu.sh.log"
 
+# One run at a time: a run started while another one is going on exits with code 1 and an error naming the lock; a
+# lock left behind by a run that was killed is taken over. LOCK_FILE is a directory, '/tmp/dciu.sh.lock' when not
+# set; a second installation sets its own path, LOCK_FILE='' runs without a lock
+#LOCK_FILE='/tmp/dciu.sh.lock'
+
 # Debug level (debug output goes to stderr):
 # 0: off (default)
 # 1: what dciu does and the key values (resolved labels, digests, notify module, HTTP status)
@@ -89,11 +128,11 @@ LOG_FILE="$SCRIPT_DIR/dciu.sh.log"
 #LOG_LEVEL=''
 
 # Secrets (tokens, webhook URLs, passwords) are shown as [hidden] in debug output and LOG_FILE.
-# Set to '1' to show them in clear text - careful, they will end up in LOG_FILE too
-#OUTPUT_INSECURE='0'
+# Set to 'true' to show them in clear text - careful, they will end up in LOG_FILE too
+#OUTPUT_INSECURE='false'
 
-# NO_TIMESTAMP: if set to '1', dciu will not add timestamps to log messages
-#NO_TIMESTAMP='0'
+# NO_TIMESTAMP: if set to 'true', dciu will not add timestamps to log messages
+#NO_TIMESTAMP='false'
 
 # Variables for notify modules must be exported to be available in the notify module scripts (e.g. prefixed with 'export')
 #DISCORD_WEBHOOK_URL='https://discord.com/api/webhooks/some-numbers/some-letters' # Update with actual webhook URL

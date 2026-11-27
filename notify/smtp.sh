@@ -266,6 +266,21 @@ EOF
   _smtp_send_python() {
     _debug "Python version" "$("$SMTP_BIN" --version 2>&1)"
 
+    # every value goes into a """...""" literal: backslashes, quotes and line breaks escaped (the JSON escapes are
+    # valid Python string escapes too), so a message or password can't end the literal early
+    _py_show_transcript="$(_escape_json "$SMTP_SHOW_TRANSCRIPT")"
+    _py_host="$(_escape_json "$SMTP_HOST")"
+    _py_port="$(_escape_json "$SMTP_PORT")"
+    _py_secure="$(_escape_json "$SMTP_SECURE")"
+    _py_username="$(_escape_json "$SMTP_USERNAME")"
+    _py_password="$(_escape_json "$SMTP_PASSWORD")"
+    _py_timeout="$(_escape_json "$SMTP_TIMEOUT")"
+    _py_x_mailer="$(_escape_json "$SMTP_X_MAILER")"
+    _py_from="$(_escape_json "$SMTP_FROM")"
+    _py_to="$(_escape_json "$SMTP_TO")"
+    _py_subject="$(_escape_json "$SMTP_SUBJECT")"
+    _py_content="$(_escape_json "$SMTP_CONTENT")"
+
     # language=Python
     "$SMTP_BIN" << PYTHON
 # This code is meant to work with either Python 2.7.x or Python 3.4+.
@@ -285,20 +300,20 @@ except ImportError as err:
           " a reduced version of Python unsuitable for sending mail: %s" % err)
     exit(1)
 
-show_transcript = """$SMTP_SHOW_TRANSCRIPT""" == "True"
+show_transcript = """$_py_show_transcript""" == "True"
 
-smtp_host = """$SMTP_HOST"""
-smtp_port = int("""$SMTP_PORT""")
-smtp_secure = """$SMTP_SECURE"""
-username = """$SMTP_USERNAME"""
-password = """$SMTP_PASSWORD"""
-timeout=int("""$SMTP_TIMEOUT""")  # seconds
-x_mailer="""$SMTP_X_MAILER"""
+smtp_host = """$_py_host"""
+smtp_port = int("""$_py_port""")
+smtp_secure = """$_py_secure"""
+username = """$_py_username"""
+password = """$_py_password"""
+timeout=int("""$_py_timeout""")  # seconds
+x_mailer="""$_py_x_mailer"""
 
-from_email="""$SMTP_FROM"""
-to_emails="""$SMTP_TO"""  # can be comma-separated
-subject="""$SMTP_SUBJECT"""
-content="""$SMTP_CONTENT"""
+from_email="""$_py_from"""
+to_emails="""$_py_to"""  # can be comma-separated
+subject="""$_py_subject"""
+content="""$_py_content"""
 
 try:
     msg = EmailMessage(policy=email_policy_default)

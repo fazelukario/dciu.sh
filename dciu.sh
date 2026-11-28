@@ -13,7 +13,7 @@
 # - (Probably in far future) Add syslog support (SYS_LOG with syslog levels, like acme.sh)
 # - (Probably in future) Add colored output (like acme.sh's __red/__green)
 
-VER=2.5.0
+VER=2.5.1
 
 PROJECT_NAME="dciu.sh"
 
@@ -356,39 +356,49 @@ fi
 # shellcheck source=dciu.conf
 . "$CONFIG_FILE"
 
-if [ -z "$LOG_FILE" ]; then LOG_FILE="$SCRIPT_DIR/dciu.sh.log"; fi
+# The log file and the label names: not set in the config -> the default; set to '' -> off (no log file; that label is
+# not read, the setting comes from the config). The settings' own defaults are applied by _init_settings.
+: "${LOG_FILE=$SCRIPT_DIR/dciu.sh.log}"
+: "${LABEL_MODE=dciu.mode}" "${LABEL_UPDATE_STOPPED=dciu.update-stopped}" "${LABEL_START_STOPPED=dciu.start-stopped}"
+: "${LABEL_PRUNE_DANGLING=dciu.prune-dangling}" "${LABEL_UPDATE_COMPOSE=dciu.update-compose}"
+: "${LABEL_PRIVATE_REPO=dciu.private-repo}" "${LABEL_COMPOSE_RECREATE=dciu.compose-recreate}"
+: "${LABEL_COMPOSE_BUILD=dciu.compose-build}" "${LABEL_SKIP_IDENTICAL_IMAGES=dciu.skip-identical-images}"
+: "${LABEL_SKIP_LOCAL_IMAGES=dciu.skip-local-images}" "${LABEL_HTTP_TIMEOUT=dciu.http-timeout}"
 
-if [ -z "$DEBUG" ]; then DEBUG='0'; fi
-
-if [ -z "$NOTIFY_SOURCE" ]; then NOTIFY_SOURCE="$(hostname -f)"; fi
-
-# labels added after 2.3.0: existing configs don't have them (the settings' defaults are in _init_settings)
-if [ -z "$LABEL_COMPOSE_RECREATE" ]; then LABEL_COMPOSE_RECREATE='dciu.compose-recreate'; fi
-if [ -z "$LABEL_COMPOSE_BUILD" ]; then LABEL_COMPOSE_BUILD='dciu.compose-build'; fi
-if [ -z "$LABEL_SKIP_IDENTICAL_IMAGES" ]; then LABEL_SKIP_IDENTICAL_IMAGES='dciu.skip-identical-images'; fi
-if [ -z "$LABEL_SKIP_LOCAL_IMAGES" ]; then LABEL_SKIP_LOCAL_IMAGES='dciu.skip-local-images'; fi
-if [ -z "$LABEL_HTTP_TIMEOUT" ]; then LABEL_HTTP_TIMEOUT='dciu.http-timeout'; fi
+# the host's full name, else its short name (hostname -f fails on a host without a domain), else the kernel's node name
+if [ -z "$NOTIFY_SOURCE" ]; then NOTIFY_SOURCE="$(hostname -f 2> /dev/null)"; fi
+if [ -z "$NOTIFY_SOURCE" ]; then NOTIFY_SOURCE="$(hostname 2> /dev/null)"; fi
+if [ -z "$NOTIFY_SOURCE" ]; then NOTIFY_SOURCE="$(uname -n 2> /dev/null)"; fi
 
 # helper: check if command exists
 _exists() {
-  cmd="$1"
-  if [ -z "$cmd" ]; then return 1; fi
+  _ex_cmd="$1"
+  if [ -z "$_ex_cmd" ]; then return 1; fi
 
   if eval type type > /dev/null 2>&1; then
     # quoted for eval: the name must not be parsed as shell code
-    eval 'type "$cmd"' > /dev/null 2>&1
+    eval 'type "$_ex_cmd"' > /dev/null 2>&1
   elif command > /dev/null 2>&1; then
-    command -v "$cmd" > /dev/null 2>&1
+    command -v "$_ex_cmd" > /dev/null 2>&1
   else
-    which "$cmd" > /dev/null 2>&1
+    which "$_ex_cmd" > /dev/null 2>&1
   fi
-  ret="$?"
-  _debug3 "$cmd exists=$ret"
-  return $ret
+  _ex_ret="$?"
+  _debug3 "$_ex_cmd exists=$_ex_ret"
+  return "$_ex_ret"
 }
 
-# function to escape JSON strings
-_escape_json() { printf "%s" "$1" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;s/\n/\\n/g;ta'; }
+# a tab and a carriage return for sed scripts (POSIX sed has no \t or \r)
+_TAB="$(printf '\t')" _CR="$(printf '\r')"
+
+# text: print text escaped for a JSON string (also valid in Python string literals): backslash, quote, tab, CR and
+# line breaks escaped, the other control characters (not allowed raw in JSON) dropped
+_escape_json() {
+  # sed collects every line first (the substitutions then see the whole text, line breaks included)
+  printf "%s" "$1" | tr -d '\001-\010\013\014\016-\037' |
+    sed -e ':a' -e '$!N' -e '$!ba' \
+      -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e "s/$_TAB/\\\\t/g" -e "s/$_CR/\\\\r/g" -e 's/\n/\\n/g'
+}
 
 # [multiline]: base64-encode stdin (acme.sh's signature); without multiline the output is a single line
 # shellcheck disable=SC2120 # multiline is optional
@@ -429,6 +439,15 @@ _inithttp() {
   fi
 }
 
+# the time limit in seconds for a registry lookup or notification request in _tl (no fork): the container's
+# HTTP_TIMEOUT, else the global one; 0 = no limit (also for an empty value or one that isn't a number)
+_time_limit() {
+  _tl="${http_timeout:-$HTTP_TIMEOUT}"
+  case "$_tl" in
+    '' | *[!0-9]*) _tl=0 ;;
+  esac
+}
+
 # body url [needbase64] [POST|PUT|DELETE] [content_type]  (acme.sh's signature; extra headers from _H1.._H5)
 # Prints the response body (also left in $response) and returns curl's exit code;
 # the HTTP status of the response is read with _http_status. needbase64 is accepted but ignored.
@@ -454,12 +473,10 @@ _post() {
 
   # no -L: a moved endpoint must fail instead of curl re-sending the POST as GET
   set -- --silent --dump-header "$HTTP_HEADER" --user-agent "$USER_AGENT" -X "$httpmethod"
-  # the container's HTTP_TIMEOUT, else the global one; 0 = no limit
-  _post_max_time="${http_timeout:-$HTTP_TIMEOUT}"
-  case "$_post_max_time" in
-    '' | 0 | *[!0-9]*) ;;
-    *) set -- "$@" --max-time "$_post_max_time" ;;
-  esac
+  _time_limit
+  if [ "$_tl" != 0 ]; then
+    set -- "$@" --max-time "$_tl"
+  fi
   if [ -n "$_postContentType" ]; then
     set -- "$@" -H "Content-Type: $_postContentType"
   fi
@@ -472,7 +489,7 @@ _post() {
   response="$(curl "$@" "$_post_url")"
   _ret="$?"
   if [ "$_ret" != "0" ]; then
-    _err "Please refer to https://curl.haxx.se/libcurl/c/libcurl-errors.html for error code: $_ret"
+    _err "Please refer to https://curl.se/libcurl/c/libcurl-errors.html for error code: $_ret"
   fi
   _debug "_ret" "$_ret"
   printf "%s" "$response"
@@ -501,12 +518,10 @@ _get() {
   fi
 
   set -- --silent -L --dump-header "$HTTP_HEADER" --user-agent "$USER_AGENT"
-  # the container's HTTP_TIMEOUT, else the global one; 0 = no limit
-  _get_max_time="${http_timeout:-$HTTP_TIMEOUT}"
-  case "$_get_max_time" in
-    '' | 0 | *[!0-9]*) ;;
-    *) set -- "$@" --max-time "$_get_max_time" ;;
-  esac
+  _time_limit
+  if [ "$_tl" != 0 ]; then
+    set -- "$@" --max-time "$_tl"
+  fi
   if [ -n "$_get_timeout" ]; then
     set -- "$@" --connect-timeout "$_get_timeout"
   fi
@@ -519,7 +534,7 @@ _get() {
   response="$(curl "$@" "$_get_url")"
   _ret="$?"
   if [ "$_ret" != "0" ]; then
-    _err "Please refer to https://curl.haxx.se/libcurl/c/libcurl-errors.html for error code: $_ret"
+    _err "Please refer to https://curl.se/libcurl/c/libcurl-errors.html for error code: $_ret"
   fi
   _debug "_ret" "$_ret"
   printf "%s" "$response"
@@ -709,9 +724,11 @@ notify_event() {
 # image is on Docker Hub, where docker.io, index.docker.io and registry-1.docker.io lead too (a single name gets
 # library/). Sets IMAGE_REGISTRY (hub.docker.com for Docker Hub), IMAGE_REGISTRY_API, IMAGE_PATH_FULL (path with
 # tag), IMAGE_PATH, IMAGE_NAMESPACE (first path component), IMAGE_REPOSITORY (second), IMAGE_TAG (latest when none)
-# and IMAGE_REGISTRY_URL
+# and IMAGE_REGISTRY_URL, the image's page for the notification button: empty when the registry host has no dot
+# (localhost, registry:5000, [::1]): Telegram refuses such a button URL, which fails the whole message. A digest
+# (name@sha256:...) is not part of the tag
 parse_image() {
-  _pi_name="$1"
+  _pi_name="${1%%@*}"
   _pi_first="${_pi_name%%/*}"
   _pi_path="$_pi_name"
   IMAGE_REGISTRY="hub.docker.com"
@@ -765,7 +782,16 @@ parse_image() {
       IMAGE_REGISTRY_URL="https://${IMAGE_REGISTRY}/r/${IMAGE_PATH}"
     fi
   else
-    IMAGE_REGISTRY_URL="https://${IMAGE_REGISTRY}/${IMAGE_PATH}"
+    # the host without its port; an IPv6 address ([...]) has no dot either
+    case "$IMAGE_REGISTRY" in
+      "["*) IMAGE_REGISTRY_URL="" ;;
+      *)
+        case "${IMAGE_REGISTRY%%:*}" in
+          *.*) IMAGE_REGISTRY_URL="https://${IMAGE_REGISTRY}/${IMAGE_PATH}" ;;
+          *) IMAGE_REGISTRY_URL="" ;;
+        esac
+        ;;
+    esac
   fi
 }
 
@@ -774,24 +800,20 @@ parse_image() {
 # (graph drivers) it is the digest of the image config. Unknown counts as classic.
 # On the containerd store also IMAGE_IDENTITY=1 when images show their pull record (Identity, Engine API 1.53): a CLI
 # speaking an older API (an older daemon, a pinned DOCKER_API_VERSION) shows none for every image, pulled ones too.
-# The same docker info call gives INSECURE_REGISTRIES: the registries the daemon lists as not secure (by name).
+# A second docker info call gives INSECURE_REGISTRIES: the registries the daemon lists as not secure (by name). Two
+# calls, so a failing one can't hide the other's answer.
 _init_image_store() {
   IMAGE_STORE="classic"
   IMAGE_IDENTITY=""
   INSECURE_REGISTRIES=""
-  # line 1: the storage driver, line 2: the insecure registries
-  if ! _iis_info="$(docker info --format '{{json .DriverStatus}}
-{{range .RegistryConfig.IndexConfigs}}{{if not .Secure}}{{.Name}} {{end}}{{end}}' 2> /dev/null)"; then
-    _iis_info=""
+  if ! _iis_driver="$(docker info --format '{{json .DriverStatus}}' 2> /dev/null)"; then
+    _iis_driver=""
     _debug "Cannot read docker info, assuming the classic image store"
   fi
-  _iis_driver="" _iis_insecure=""
-  {
-    IFS= read -r _iis_driver
-    IFS= read -r _iis_insecure
-  } << EOF
-$_iis_info
-EOF
+  if ! _iis_insecure="$(docker info --format '{{range .RegistryConfig.IndexConfigs}}{{if not .Secure}}{{.Name}} {{end}}{{end}}' 2> /dev/null)"; then
+    _iis_insecure=""
+    _debug "Cannot read the insecure registries from docker info"
+  fi
   case "$_iis_driver" in
     *io.containerd.snapshotter*) IMAGE_STORE="containerd" ;;
   esac
@@ -912,10 +934,10 @@ get_remote_digest() {
 
 # what rc: check_error for a failed curl request to what; curl error 28 within a time limit is HTTP_TIMEOUT's
 _curl_reason() {
-  _cr_max_time="${http_timeout:-$HTTP_TIMEOUT}"
-  case "$2:$_cr_max_time" in
-    28: | 28:0 | 28:*[!0-9]*) check_error="cannot reach $1 (curl error $2)" ;;
-    28:*) check_error="no answer from $1 within ${_cr_max_time}s (HTTP_TIMEOUT)" ;;
+  _time_limit
+  case "$2:$_tl" in
+    28:0) check_error="cannot reach $1 (curl error $2)" ;;
+    28:*) check_error="no answer from $1 within ${_tl}s (HTTP_TIMEOUT)" ;;
     *) check_error="cannot reach $1 (curl error $2)" ;;
   esac
 }
@@ -969,7 +991,7 @@ _get_dockerhub_digest() {
     return 1
   fi
 
-  # consider posibility of replacing jq with pure grep, awk and etc. in the future
+  # consider the possibility of replacing jq with pure grep, awk and etc. in the future
   _gdd_digest="$(printf '%s' "$_gdd_body" | jq -r '.digest // empty' 2> /dev/null)"
   case "$_gdd_digest" in
     *:*) remote_digest="${_gdd_digest#*:}" ;;
@@ -1098,7 +1120,17 @@ _with_timeout() {
 # and ::1 (its default CIDRs) and the registries docker info lists as not secure
 _registry_insecure() {
   case "$1" in
-    localhost | localhost:* | 127.* | "[::1]" | "[::1]:"*) return 0 ;;
+    localhost | localhost:* | "[::1]" | "[::1]:"*) return 0 ;;
+  esac
+  # 127.0.0.0/8 as an IPv4 address (127.N.N.N, 1-3 digits each), with or without a :port; a host name like
+  # 127.example.com is not one (the daemon resolves names, dciu doesn't: such a registry must be listed by name)
+  _ri_host="${1%%:*}"
+  case "${1#"$_ri_host"}" in
+    : | :*[!0-9]*) _ri_host="" ;;
+  esac
+  case "$_ri_host" in
+    *[!0-9.]* | *..* | *. | *.*.*.*.* | *[0-9][0-9][0-9][0-9]*) ;;
+    127.*.*.*) return 0 ;;
   esac
   case " $INSECURE_REGISTRIES " in
     *" $1 "*) return 0 ;;
@@ -1116,7 +1148,8 @@ _get_manifest_digest() {
   if _registry_insecure "$IMAGE_REGISTRY"; then
     set -- --insecure
   fi
-  _gmd_max_time="${http_timeout:-$HTTP_TIMEOUT}"
+  _time_limit
+  _gmd_max_time="$_tl"
   _gmd_manifest -v "$@" || return 1
   case "$_gmd_out" in
     "{"*)
@@ -1180,7 +1213,16 @@ check_update() {
   fi
   _debug "local_digests" "$local_digests"
   if [ -z "$local_digests" ]; then
-    check_error="the image has no registry digest (built or loaded locally?), set the label $LABEL_SKIP_LOCAL_IMAGES=true or $LABEL_MODE=none to skip this container"
+    # how to skip it: the labels that are on (a label set to '' is not read), else the global setting
+    _cu_skip=""
+    if [ -n "$LABEL_SKIP_LOCAL_IMAGES" ]; then _cu_skip="$LABEL_SKIP_LOCAL_IMAGES=true"; fi
+    if [ -n "$LABEL_MODE" ]; then _cu_skip="${_cu_skip:+$_cu_skip or }$LABEL_MODE=none"; fi
+    if [ -n "$_cu_skip" ]; then
+      _cu_skip="the label $_cu_skip"
+    else
+      _cu_skip="SKIP_LOCAL_IMAGES='true'"
+    fi
+    check_error="the image has no registry digest (built or loaded locally?), set $_cu_skip to skip this container"
     return "$CHECK_FAILED"
   fi
   old_digest="${local_digests%% *}"

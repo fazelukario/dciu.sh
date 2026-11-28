@@ -45,7 +45,8 @@ telegram_send() {
   nd=$(escape_markdown "${new_digest:-unknown}")
   rn=$(escape_markdown "$running")
   md=$(escape_markdown "$mode")
-  msg=$(escape_markdown "$message")
+  # the message as a blockquote: MarkdownV2 quotes a line only when it starts with >, so every line gets one
+  msg=$(escape_markdown "$message" | sed 's/^/>/')
   src=$(escape_markdown "$NOTIFY_SOURCE")
 
   # build message text with here-doc for POSIX compliance
@@ -60,7 +61,7 @@ telegram_send() {
 *🏃‍♂️ Running:* ${rn}
 *⚙ Mode:* ${md}
 *📋 Message:*
->${msg}
+${msg:->}
 _🖥 Source:_ \`${src}\`
 EOF
   )
@@ -71,14 +72,20 @@ EOF
 
   _debug "button_url" "$button_url"
 
-  # build inline keyboard JSON
-  reply_markup=$(
-    cat << EOF
-{"inline_keyboard":[[{"text":"View on Docker Hub 🐳","url":"$button_url"}]]}
-EOF
-  )
+  # a link button to the image's page, named after its registry; none when there is no page to link to (Telegram
+  # refuses the whole message for a URL it doesn't accept)
+  reply_markup_field=""
+  if [ -n "$button_url" ]; then
+    if [ "$IMAGE_REGISTRY" = "hub.docker.com" ]; then
+      button_label="View on Docker Hub 🐳"
+    else
+      button_label="View on $(_escape_json "$IMAGE_REGISTRY")"
+    fi
+    reply_markup_field=",
+  \"reply_markup\":{\"inline_keyboard\":[[{\"text\":\"$button_label\",\"url\":\"$button_url\"}]]}"
+  fi
 
-  _debug2 "reply_markup" "$reply_markup"
+  _debug2 "reply_markup_field" "$reply_markup_field"
 
   # build JSON payload
   payload=$(
@@ -86,8 +93,7 @@ EOF
 {
   "chat_id":"$(_escape_json "$TELEGRAM_BOT_CHATID")",
   "text":"$(_escape_json "$text")",
-  "parse_mode":"MarkdownV2",
-  "reply_markup":$reply_markup
+  "parse_mode":"MarkdownV2"${reply_markup_field}
 }
 EOF
   )

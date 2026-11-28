@@ -13,7 +13,7 @@
 # SMTP_SECURE="tls"             # one of "none","ssl" (implicit TLS, TLS Wrapper),"tls" (explicit TLS, STARTTLS); default tls
 # SMTP_USERNAME=""              # set if SMTP server requires login
 # SMTP_PASSWORD=""              # set if SMTP server requires login
-# SMTP_TIMEOUT="30"             # seconds for SMTP operations to timeout; default 30
+# SMTP_TIMEOUT="30"             # seconds for SMTP operations to timeout; default 30, 0 = no limit
 # SMTP_BIN=""                   # command to use; default finds first of python3, python2.7, python, pypy3, pypy, curl on PATH
 
 smtp_send() {
@@ -122,6 +122,12 @@ smtp_send() {
   _secure_debug "SMTP_PASSWORD" "$SMTP_PASSWORD"
 
   if [ -z "$SMTP_TIMEOUT" ]; then SMTP_TIMEOUT="$SMTP_TIMEOUT_DEFAULT"; fi
+  case "$SMTP_TIMEOUT" in
+    *[!0-9]*)
+      _err "Invalid SMTP_TIMEOUT='$SMTP_TIMEOUT'. It must be a number of seconds (0 = no limit)."
+      return 1
+      ;;
+  esac
   _debug "SMTP_TIMEOUT" "$SMTP_TIMEOUT"
 
   SMTP_X_MAILER="$(_clean_email_header "$PROJECT_NAME $VER --notify-hook smtp ($SMTP_BIN)")"
@@ -150,7 +156,8 @@ Source: $NOTIFY_SOURCE
 EOF
   )
 
-  SMTP_CONTENT="$(printf "%s" "$content")"
+  # no CR in the body: SMTP allows CR only as part of a line break (curl --crlf leaves a lone CR as it is)
+  SMTP_CONTENT="$(printf "%s" "$content" | tr -d '\r')"
   _debug2 "SMTP_CONTENT" "$SMTP_CONTENT"
 
   ##
@@ -181,10 +188,8 @@ EOF
     #   - this is deliberately not UTC, because it "SHOULD express local time" per spec
     #   - the spec requires weekday and month in the C locale (English), not localized
     #   - this date format specifier has been tested on Linux, Mac, Solaris and FreeBSD
-    _old_lc_time="$LC_TIME"
-    LC_TIME=C
-    date +'%a, %-d %b %Y %H:%M:%S %z'
-    LC_TIME="$_old_lc_time"
+    #   - LC_ALL: it overrides LANG and an LC_TIME from the environment
+    LC_ALL=C date +'%a, %-d %b %Y %H:%M:%S %z'
   }
 
   # Output an RFC-822 / RFC-5322 email message using SMTP_* variables.
@@ -195,7 +200,9 @@ EOF
     printf "%s\n" "To: $SMTP_TO"
     printf "%s\n" "Subject: $(_mime_encoded_word "$SMTP_SUBJECT")"
     printf "%s\n" "Date: $(_rfc2822_date)"
+    printf "%s\n" "MIME-Version: 1.0"
     printf "%s\n" "Content-Type: text/plain; charset=utf-8"
+    printf "%s\n" "Content-Transfer-Encoding: 8bit"
     printf "%s\n" "X-Mailer: $SMTP_X_MAILER"
     printf "\n"
     printf "%s\n" "$SMTP_CONTENT"
@@ -224,10 +231,16 @@ EOF
         ;;
     esac
 
+    # --crlf: SMTP needs CRLF line endings (a bare LF can be refused, and a line that is just "." is only escaped
+    # after a CRLF, so it would end the mail early)
     set -- "$@" \
       --upload-file - \
-      --mail-from "$SMTP_FROM" \
-      --max-time "$SMTP_TIMEOUT"
+      --crlf \
+      --mail-from "$SMTP_FROM"
+    # 0 (any number of zeros) = no limit
+    case "$SMTP_TIMEOUT" in
+      *[!0]*) set -- "$@" --max-time "$SMTP_TIMEOUT" ;;
+    esac
 
     # Burst comma-separated $SMTP_TO into individual --mail-rcpt args.
     _to="${SMTP_TO},"
@@ -307,7 +320,7 @@ smtp_port = int("""$_py_port""")
 smtp_secure = """$_py_secure"""
 username = """$_py_username"""
 password = """$_py_password"""
-timeout=int("""$_py_timeout""")  # seconds
+timeout = int("""$_py_timeout""") or None  # seconds, 0 = no limit
 x_mailer="""$_py_x_mailer"""
 
 from_email="""$_py_from"""

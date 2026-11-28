@@ -66,6 +66,31 @@ discord_send() {
 
   _debug "button_url" "$button_url"
 
+  # a link button to the image's page, named after its registry; none when there is no page to link to
+  button_row=""
+  if [ -n "$button_url" ]; then
+    if [ "$IMAGE_REGISTRY" = "hub.docker.com" ]; then
+      button_label="View on Docker Hub 🐳"
+    else
+      button_label="View on $(_escape_json "$IMAGE_REGISTRY")"
+    fi
+    button_row=$(
+      cat << EOF
+        {
+          "type": 1,
+          "components": [
+            {
+              "type": 2,
+              "style": 5,
+              "label": "$button_label",
+              "url": "$button_url"
+            }
+          ]
+        },
+EOF
+    )
+  fi
+
   # Build payload with Container and Components V2
   payload=$(
     cat << EOF
@@ -132,17 +157,7 @@ discord_send() {
           "divider": true,
           "spacing": 1
         },
-        {
-          "type": 1,
-          "components": [
-            {
-              "type": 2,
-              "style": 5,
-              "label": "View on Docker Hub 🐳",
-              "url": "$button_url"
-            }
-          ]
-        },
+${button_row}
         {
           "type": 10,
           "content": "-# :alarm_clock: $ts | :desktop: Source: $src"

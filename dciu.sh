@@ -718,9 +718,11 @@ notify_event() {
 # image is on Docker Hub, where docker.io, index.docker.io and registry-1.docker.io lead too (a single name gets
 # library/). Sets IMAGE_REGISTRY (hub.docker.com for Docker Hub), IMAGE_REGISTRY_API, IMAGE_PATH_FULL (path with
 # tag), IMAGE_PATH, IMAGE_NAMESPACE (first path component), IMAGE_REPOSITORY (second), IMAGE_TAG (latest when none)
-# and IMAGE_REGISTRY_URL
+# and IMAGE_REGISTRY_URL, the image's page for the notification button: empty when the registry host has no dot
+# (localhost, registry:5000, [::1]): Telegram refuses such a button URL, which fails the whole message. A digest
+# (name@sha256:...) is not part of the tag
 parse_image() {
-  _pi_name="$1"
+  _pi_name="${1%%@*}"
   _pi_first="${_pi_name%%/*}"
   _pi_path="$_pi_name"
   IMAGE_REGISTRY="hub.docker.com"
@@ -774,7 +776,16 @@ parse_image() {
       IMAGE_REGISTRY_URL="https://${IMAGE_REGISTRY}/r/${IMAGE_PATH}"
     fi
   else
-    IMAGE_REGISTRY_URL="https://${IMAGE_REGISTRY}/${IMAGE_PATH}"
+    # the host without its port; an IPv6 address ([...]) has no dot either
+    case "$IMAGE_REGISTRY" in
+      "["*) IMAGE_REGISTRY_URL="" ;;
+      *)
+        case "${IMAGE_REGISTRY%%:*}" in
+          *.*) IMAGE_REGISTRY_URL="https://${IMAGE_REGISTRY}/${IMAGE_PATH}" ;;
+          *) IMAGE_REGISTRY_URL="" ;;
+        esac
+        ;;
+    esac
   fi
 }
 

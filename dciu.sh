@@ -387,8 +387,17 @@ _exists() {
   return $ret
 }
 
-# function to escape JSON strings
-_escape_json() { printf "%s" "$1" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;s/\n/\\n/g;ta'; }
+# a tab and a carriage return for sed scripts (POSIX sed has no \t or \r)
+_TAB="$(printf '\t')" _CR="$(printf '\r')"
+
+# text: print text escaped for a JSON string (also valid in Python string literals): backslash, quote, tab, CR and
+# line breaks escaped, the other control characters (not allowed raw in JSON) dropped
+_escape_json() {
+  # sed collects every line first (the substitutions then see the whole text, line breaks included)
+  printf "%s" "$1" | tr -d '\001-\010\013\014\016-\037' |
+    sed -e ':a' -e '$!N' -e '$!ba' \
+      -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e "s/$_TAB/\\\\t/g" -e "s/$_CR/\\\\r/g" -e 's/\n/\\n/g'
+}
 
 # [multiline]: base64-encode stdin (acme.sh's signature); without multiline the output is a single line
 # shellcheck disable=SC2120 # multiline is optional

@@ -6,8 +6,9 @@
 # value fails that container's update check (check_failed) and dciu leaves the container alone. A LABEL_* not set
 # here uses its default name; set to '' that label is not read (the setting then comes from this file).
 #
-# Exit code: 0, or 1 when a container's check or update failed, a setting or label was invalid, docker ps failed or
-# another run holds the lock (LOCK_FILE). Skipped containers and failed notifications don't count.
+# Exit code: 0, or 1 when a container's check or update failed, a container can't be read (docker inspect fails or a
+# label value has a line break), a setting or label was invalid, docker ps failed, another run holds the lock
+# (LOCK_FILE) or the lock can't be created. Skipped containers and failed notifications don't count.
 # Containers whose image is pinned to a digest (image@sha256:...) or given as an image ID are skipped: there is no
 # newer image for them.
 
@@ -50,13 +51,16 @@ SKIP_IDENTICAL_IMAGES='true'
 #   'false': they are checked like the others (the behaviour before 2.5.0): on the classic image store their check
 #            fails (no registry digest), on the containerd store they are looked up on the registry by their name
 # Local means: classic image store - the image has no registry digest; containerd image store - the image has no pull
-# record (Docker 29 or later: API 1.53 for both the CLI and the daemon; with an older Docker no image counts as
+# record (Docker 29.2 or later: API 1.53 for both the CLI and the daemon; with an older Docker no image counts as
 # local there). An image built here and pushed to a registry counts as pulled. A container whose tag now points to a
 # local build (built after the container was created) is skipped too: a pull would take the tag away from the build.
 SKIP_LOCAL_IMAGES='true'
 
 # Images in private repositories: 'true' looks them up with your credentials (GITHUB_TOKEN for ghcr.io, the login of
-# 'docker login' for the other registries), 'false' (default). Per container: LABEL_PRIVATE_REPO below
+# 'docker login' for Docker Hub), 'false' (default). Other registries are always looked up with the login of
+# 'docker login'. Prefer the label (LABEL_PRIVATE_REPO below) on the containers whose image is private: set here, it
+# applies to every container, so every Docker Hub image goes through 'docker manifest inspect' (a public multi-platform
+# image then shows an update on every run) and every ghcr.io image needs GITHUB_TOKEN.
 PRIVATE_REPO='false'
 
 # Time limit in seconds for each registry lookup and notification request, '0' = no limit (default '30'). Pulls and
@@ -92,7 +96,7 @@ LABEL_HTTP_TIMEOUT='dciu.http-timeout'
 # ghcr.io private repositories need GITHUB_TOKEN (read:packages scope)
 LABEL_PRIVATE_REPO='dciu.private-repo'
 
-# Notify module name (script in notify/ directory)
+# Notify modules, comma-separated: discord, telegram, smtp (scripts in notify/); their settings are at the end
 NOTIFY_MODULE='discord,telegram'
 # Notify events: comma- or space-separated list of events to notify on (e.g. 'update_available,updated', 'all' or 'none')
 # Available events: update_available, updated, update_failed, update_skipped, check_failed
@@ -136,10 +140,24 @@ LOG_FILE="$SCRIPT_DIR/dciu.sh.log"
 # NO_TIMESTAMP: if set to 'true', dciu will not add timestamps to log messages
 #NO_TIMESTAMP='false'
 
-# Variables for notify modules must be exported to be available in the notify module scripts (e.g. prefixed with 'export')
+# Settings of the notify modules. The modules are sourced by dciu.sh: their settings below need no export.
+# discord
 #DISCORD_WEBHOOK_URL='https://discord.com/api/webhooks/some-numbers/some-letters' # Update with actual webhook URL
 #DISCORD_AVATAR_URL='https://example.com/avatar.png'  # Update with actual avatar URL
 #DISCORD_USERNAME='dciu.sh'
 
+# telegram
 #TELEGRAM_BOT_APITOKEN='123456789:ABCxyz' # Update with actual bot token
 #TELEGRAM_BOT_CHATID='123456789' # Update with actual chat ID
+#TELEGRAM_BOT_URLBASE='https://api.telegram.org' # the default
+
+# smtp (sends with Python or curl)
+#SMTP_FROM='from@example.com'       # required: the sender address only, no display name
+#SMTP_TO='to@example.com'           # required: comma-separated addresses, no display names
+#SMTP_HOST='smtp.example.com'       # required
+#SMTP_SECURE='tls'                  # 'tls' (STARTTLS, default), 'ssl' (implicit TLS) or 'none'
+#SMTP_PORT='587'                    # default 587 for tls, 465 for ssl, 25 for none
+#SMTP_USERNAME=''                   # when the server requires a login
+#SMTP_PASSWORD=''
+#SMTP_TIMEOUT='30'                  # seconds for the SMTP operations, '0' = no limit (default '30')
+#SMTP_BIN=''                        # default: the first of python3, python2.7, python, pypy3, pypy, curl on PATH

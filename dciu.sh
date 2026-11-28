@@ -365,8 +365,6 @@ fi
 : "${LABEL_COMPOSE_BUILD=dciu.compose-build}" "${LABEL_SKIP_IDENTICAL_IMAGES=dciu.skip-identical-images}"
 : "${LABEL_SKIP_LOCAL_IMAGES=dciu.skip-local-images}" "${LABEL_HTTP_TIMEOUT=dciu.http-timeout}"
 
-if [ -z "$DEBUG" ]; then DEBUG='0'; fi
-
 # the host's full name, else its short name (hostname -f fails on a host without a domain), else the kernel's node name
 if [ -z "$NOTIFY_SOURCE" ]; then NOTIFY_SOURCE="$(hostname -f 2> /dev/null)"; fi
 if [ -z "$NOTIFY_SOURCE" ]; then NOTIFY_SOURCE="$(hostname 2> /dev/null)"; fi
@@ -374,20 +372,20 @@ if [ -z "$NOTIFY_SOURCE" ]; then NOTIFY_SOURCE="$(uname -n 2> /dev/null)"; fi
 
 # helper: check if command exists
 _exists() {
-  cmd="$1"
-  if [ -z "$cmd" ]; then return 1; fi
+  _ex_cmd="$1"
+  if [ -z "$_ex_cmd" ]; then return 1; fi
 
   if eval type type > /dev/null 2>&1; then
     # quoted for eval: the name must not be parsed as shell code
-    eval 'type "$cmd"' > /dev/null 2>&1
+    eval 'type "$_ex_cmd"' > /dev/null 2>&1
   elif command > /dev/null 2>&1; then
-    command -v "$cmd" > /dev/null 2>&1
+    command -v "$_ex_cmd" > /dev/null 2>&1
   else
-    which "$cmd" > /dev/null 2>&1
+    which "$_ex_cmd" > /dev/null 2>&1
   fi
-  ret="$?"
-  _debug3 "$cmd exists=$ret"
-  return $ret
+  _ex_ret="$?"
+  _debug3 "$_ex_cmd exists=$_ex_ret"
+  return "$_ex_ret"
 }
 
 # a tab and a carriage return for sed scripts (POSIX sed has no \t or \r)
@@ -441,6 +439,15 @@ _inithttp() {
   fi
 }
 
+# the time limit in seconds for a registry lookup or notification request in _tl (no fork): the container's
+# HTTP_TIMEOUT, else the global one; 0 = no limit (also for an empty value or one that isn't a number)
+_time_limit() {
+  _tl="${http_timeout:-$HTTP_TIMEOUT}"
+  case "$_tl" in
+    '' | *[!0-9]*) _tl=0 ;;
+  esac
+}
+
 # body url [needbase64] [POST|PUT|DELETE] [content_type]  (acme.sh's signature; extra headers from _H1.._H5)
 # Prints the response body (also left in $response) and returns curl's exit code;
 # the HTTP status of the response is read with _http_status. needbase64 is accepted but ignored.
@@ -466,12 +473,10 @@ _post() {
 
   # no -L: a moved endpoint must fail instead of curl re-sending the POST as GET
   set -- --silent --dump-header "$HTTP_HEADER" --user-agent "$USER_AGENT" -X "$httpmethod"
-  # the container's HTTP_TIMEOUT, else the global one; 0 = no limit
-  _post_max_time="${http_timeout:-$HTTP_TIMEOUT}"
-  case "$_post_max_time" in
-    '' | 0 | *[!0-9]*) ;;
-    *) set -- "$@" --max-time "$_post_max_time" ;;
-  esac
+  _time_limit
+  if [ "$_tl" != 0 ]; then
+    set -- "$@" --max-time "$_tl"
+  fi
   if [ -n "$_postContentType" ]; then
     set -- "$@" -H "Content-Type: $_postContentType"
   fi
@@ -484,7 +489,7 @@ _post() {
   response="$(curl "$@" "$_post_url")"
   _ret="$?"
   if [ "$_ret" != "0" ]; then
-    _err "Please refer to https://curl.haxx.se/libcurl/c/libcurl-errors.html for error code: $_ret"
+    _err "Please refer to https://curl.se/libcurl/c/libcurl-errors.html for error code: $_ret"
   fi
   _debug "_ret" "$_ret"
   printf "%s" "$response"
@@ -513,12 +518,10 @@ _get() {
   fi
 
   set -- --silent -L --dump-header "$HTTP_HEADER" --user-agent "$USER_AGENT"
-  # the container's HTTP_TIMEOUT, else the global one; 0 = no limit
-  _get_max_time="${http_timeout:-$HTTP_TIMEOUT}"
-  case "$_get_max_time" in
-    '' | 0 | *[!0-9]*) ;;
-    *) set -- "$@" --max-time "$_get_max_time" ;;
-  esac
+  _time_limit
+  if [ "$_tl" != 0 ]; then
+    set -- "$@" --max-time "$_tl"
+  fi
   if [ -n "$_get_timeout" ]; then
     set -- "$@" --connect-timeout "$_get_timeout"
   fi
@@ -531,7 +534,7 @@ _get() {
   response="$(curl "$@" "$_get_url")"
   _ret="$?"
   if [ "$_ret" != "0" ]; then
-    _err "Please refer to https://curl.haxx.se/libcurl/c/libcurl-errors.html for error code: $_ret"
+    _err "Please refer to https://curl.se/libcurl/c/libcurl-errors.html for error code: $_ret"
   fi
   _debug "_ret" "$_ret"
   printf "%s" "$response"
@@ -931,10 +934,10 @@ get_remote_digest() {
 
 # what rc: check_error for a failed curl request to what; curl error 28 within a time limit is HTTP_TIMEOUT's
 _curl_reason() {
-  _cr_max_time="${http_timeout:-$HTTP_TIMEOUT}"
-  case "$2:$_cr_max_time" in
-    28: | 28:0 | 28:*[!0-9]*) check_error="cannot reach $1 (curl error $2)" ;;
-    28:*) check_error="no answer from $1 within ${_cr_max_time}s (HTTP_TIMEOUT)" ;;
+  _time_limit
+  case "$2:$_tl" in
+    28:0) check_error="cannot reach $1 (curl error $2)" ;;
+    28:*) check_error="no answer from $1 within ${_tl}s (HTTP_TIMEOUT)" ;;
     *) check_error="cannot reach $1 (curl error $2)" ;;
   esac
 }
@@ -988,7 +991,7 @@ _get_dockerhub_digest() {
     return 1
   fi
 
-  # consider posibility of replacing jq with pure grep, awk and etc. in the future
+  # consider the possibility of replacing jq with pure grep, awk and etc. in the future
   _gdd_digest="$(printf '%s' "$_gdd_body" | jq -r '.digest // empty' 2> /dev/null)"
   case "$_gdd_digest" in
     *:*) remote_digest="${_gdd_digest#*:}" ;;
@@ -1145,7 +1148,8 @@ _get_manifest_digest() {
   if _registry_insecure "$IMAGE_REGISTRY"; then
     set -- --insecure
   fi
-  _gmd_max_time="${http_timeout:-$HTTP_TIMEOUT}"
+  _time_limit
+  _gmd_max_time="$_tl"
   _gmd_manifest -v "$@" || return 1
   case "$_gmd_out" in
     "{"*)

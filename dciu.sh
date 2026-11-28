@@ -1118,7 +1118,17 @@ _with_timeout() {
 # and ::1 (its default CIDRs) and the registries docker info lists as not secure
 _registry_insecure() {
   case "$1" in
-    localhost | localhost:* | 127.* | "[::1]" | "[::1]:"*) return 0 ;;
+    localhost | localhost:* | "[::1]" | "[::1]:"*) return 0 ;;
+  esac
+  # 127.0.0.0/8 as an IPv4 address (127.N.N.N, 1-3 digits each), with or without a :port; a host name like
+  # 127.example.com is not one (the daemon resolves names, dciu doesn't: such a registry must be listed by name)
+  _ri_host="${1%%:*}"
+  case "${1#"$_ri_host"}" in
+    : | :*[!0-9]*) _ri_host="" ;;
+  esac
+  case "$_ri_host" in
+    *[!0-9.]* | *..* | *. | *.*.*.*.* | *[0-9][0-9][0-9][0-9]*) ;;
+    127.*.*.*) return 0 ;;
   esac
   case " $INSECURE_REGISTRIES " in
     *" $1 "*) return 0 ;;

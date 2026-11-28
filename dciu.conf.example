@@ -85,8 +85,9 @@ LABEL_HTTP_TIMEOUT='dciu.http-timeout'
 # 'docker manifest inspect', using the credentials of 'docker login'. A single-platform image is compared exactly; a
 # multi-platform image only when its list was pushed with 'docker manifest push', otherwise it shows an update on every
 # run (support for these registries is a TODO). Registries the Docker daemon treats as insecure (localhost,
-# 127.0.0.0/8, ::1 and its insecure-registries listed by name) are contacted with --insecure; one that is insecure
-# only through a CIDR in insecure-registries isn't detected: list it there by name.
+# 127.0.0.0/8 as an IP address, ::1 and its insecure-registries listed by name) are contacted with --insecure; one
+# that is insecure only through a CIDR in insecure-registries, or a name that resolves to 127.x, isn't detected: list
+# it there by name.
 # ghcr.io private repositories need GITHUB_TOKEN (read:packages scope)
 LABEL_PRIVATE_REPO='dciu.private-repo'
 

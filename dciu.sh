@@ -367,7 +367,10 @@ fi
 
 if [ -z "$DEBUG" ]; then DEBUG='0'; fi
 
-if [ -z "$NOTIFY_SOURCE" ]; then NOTIFY_SOURCE="$(hostname -f)"; fi
+# the host's full name, else its short name (hostname -f fails on a host without a domain), else the kernel's node name
+if [ -z "$NOTIFY_SOURCE" ]; then NOTIFY_SOURCE="$(hostname -f 2> /dev/null)"; fi
+if [ -z "$NOTIFY_SOURCE" ]; then NOTIFY_SOURCE="$(hostname 2> /dev/null)"; fi
+if [ -z "$NOTIFY_SOURCE" ]; then NOTIFY_SOURCE="$(uname -n 2> /dev/null)"; fi
 
 # helper: check if command exists
 _exists() {

@@ -794,24 +794,20 @@ parse_image() {
 # (graph drivers) it is the digest of the image config. Unknown counts as classic.
 # On the containerd store also IMAGE_IDENTITY=1 when images show their pull record (Identity, Engine API 1.53): a CLI
 # speaking an older API (an older daemon, a pinned DOCKER_API_VERSION) shows none for every image, pulled ones too.
-# The same docker info call gives INSECURE_REGISTRIES: the registries the daemon lists as not secure (by name).
+# A second docker info call gives INSECURE_REGISTRIES: the registries the daemon lists as not secure (by name). Two
+# calls, so a failing one can't hide the other's answer.
 _init_image_store() {
   IMAGE_STORE="classic"
   IMAGE_IDENTITY=""
   INSECURE_REGISTRIES=""
-  # line 1: the storage driver, line 2: the insecure registries
-  if ! _iis_info="$(docker info --format '{{json .DriverStatus}}
-{{range .RegistryConfig.IndexConfigs}}{{if not .Secure}}{{.Name}} {{end}}{{end}}' 2> /dev/null)"; then
-    _iis_info=""
+  if ! _iis_driver="$(docker info --format '{{json .DriverStatus}}' 2> /dev/null)"; then
+    _iis_driver=""
     _debug "Cannot read docker info, assuming the classic image store"
   fi
-  _iis_driver="" _iis_insecure=""
-  {
-    IFS= read -r _iis_driver
-    IFS= read -r _iis_insecure
-  } << EOF
-$_iis_info
-EOF
+  if ! _iis_insecure="$(docker info --format '{{range .RegistryConfig.IndexConfigs}}{{if not .Secure}}{{.Name}} {{end}}{{end}}' 2> /dev/null)"; then
+    _iis_insecure=""
+    _debug "Cannot read the insecure registries from docker info"
+  fi
   case "$_iis_driver" in
     *io.containerd.snapshotter*) IMAGE_STORE="containerd" ;;
   esac

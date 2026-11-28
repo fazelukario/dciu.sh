@@ -3,7 +3,8 @@
 # Values: settings that are on or off take 'true' or 'false' ('yes'/'no' and '1'/'0' work too), in any case.
 # An invalid value in this file is reported once per run, its default is used and the run ends with exit code 1.
 # Most settings can be set per container with a label (LABEL_* below), which overrides this file; an invalid label
-# value fails that container's update check (check_failed) and dciu leaves the container alone.
+# value fails that container's update check (check_failed) and dciu leaves the container alone. A LABEL_* not set
+# here uses its default name; set to '' that label is not read (the setting then comes from this file).
 #
 # Exit code: 0, or 1 when a container's check or update failed, a setting or label was invalid, docker ps failed or
 # another run holds the lock (LOCK_FILE). Skipped containers and failed notifications don't count.
@@ -110,7 +111,7 @@ NOTIFY_EVENT='update_available,updated,update_failed,check_failed'
 # REGISTRY_USER=''
 # REGISTRY_PASSWORD=''
 
-# Log file path
+# Log file path ('' = no log file, console only; not set: dciu.sh.log next to dciu.sh)
 LOG_FILE="$SCRIPT_DIR/dciu.sh.log"
 
 # One run at a time: a run started while another one is going on exits with code 1 and an error naming the lock; a

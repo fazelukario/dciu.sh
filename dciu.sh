@@ -356,18 +356,18 @@ fi
 # shellcheck source=dciu.conf
 . "$CONFIG_FILE"
 
-if [ -z "$LOG_FILE" ]; then LOG_FILE="$SCRIPT_DIR/dciu.sh.log"; fi
+# The log file and the label names: not set in the config -> the default; set to '' -> off (no log file; that label is
+# not read, the setting comes from the config). The settings' own defaults are applied by _init_settings.
+: "${LOG_FILE=$SCRIPT_DIR/dciu.sh.log}"
+: "${LABEL_MODE=dciu.mode}" "${LABEL_UPDATE_STOPPED=dciu.update-stopped}" "${LABEL_START_STOPPED=dciu.start-stopped}"
+: "${LABEL_PRUNE_DANGLING=dciu.prune-dangling}" "${LABEL_UPDATE_COMPOSE=dciu.update-compose}"
+: "${LABEL_PRIVATE_REPO=dciu.private-repo}" "${LABEL_COMPOSE_RECREATE=dciu.compose-recreate}"
+: "${LABEL_COMPOSE_BUILD=dciu.compose-build}" "${LABEL_SKIP_IDENTICAL_IMAGES=dciu.skip-identical-images}"
+: "${LABEL_SKIP_LOCAL_IMAGES=dciu.skip-local-images}" "${LABEL_HTTP_TIMEOUT=dciu.http-timeout}"
 
 if [ -z "$DEBUG" ]; then DEBUG='0'; fi
 
 if [ -z "$NOTIFY_SOURCE" ]; then NOTIFY_SOURCE="$(hostname -f)"; fi
-
-# labels added after 2.3.0: existing configs don't have them (the settings' defaults are in _init_settings)
-if [ -z "$LABEL_COMPOSE_RECREATE" ]; then LABEL_COMPOSE_RECREATE='dciu.compose-recreate'; fi
-if [ -z "$LABEL_COMPOSE_BUILD" ]; then LABEL_COMPOSE_BUILD='dciu.compose-build'; fi
-if [ -z "$LABEL_SKIP_IDENTICAL_IMAGES" ]; then LABEL_SKIP_IDENTICAL_IMAGES='dciu.skip-identical-images'; fi
-if [ -z "$LABEL_SKIP_LOCAL_IMAGES" ]; then LABEL_SKIP_LOCAL_IMAGES='dciu.skip-local-images'; fi
-if [ -z "$LABEL_HTTP_TIMEOUT" ]; then LABEL_HTTP_TIMEOUT='dciu.http-timeout'; fi
 
 # helper: check if command exists
 _exists() {
@@ -1206,7 +1206,16 @@ check_update() {
   fi
   _debug "local_digests" "$local_digests"
   if [ -z "$local_digests" ]; then
-    check_error="the image has no registry digest (built or loaded locally?), set the label $LABEL_SKIP_LOCAL_IMAGES=true or $LABEL_MODE=none to skip this container"
+    # how to skip it: the labels that are on (a label set to '' is not read), else the global setting
+    _cu_skip=""
+    if [ -n "$LABEL_SKIP_LOCAL_IMAGES" ]; then _cu_skip="$LABEL_SKIP_LOCAL_IMAGES=true"; fi
+    if [ -n "$LABEL_MODE" ]; then _cu_skip="${_cu_skip:+$_cu_skip or }$LABEL_MODE=none"; fi
+    if [ -n "$_cu_skip" ]; then
+      _cu_skip="the label $_cu_skip"
+    else
+      _cu_skip="SKIP_LOCAL_IMAGES='true'"
+    fi
+    check_error="the image has no registry digest (built or loaded locally?), set $_cu_skip to skip this container"
     return "$CHECK_FAILED"
   fi
   old_digest="${local_digests%% *}"

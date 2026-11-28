@@ -45,7 +45,8 @@ telegram_send() {
   nd=$(escape_markdown "${new_digest:-unknown}")
   rn=$(escape_markdown "$running")
   md=$(escape_markdown "$mode")
-  msg=$(escape_markdown "$message")
+  # the message as a blockquote: MarkdownV2 quotes a line only when it starts with >, so every line gets one
+  msg=$(escape_markdown "$message" | sed 's/^/>/')
   src=$(escape_markdown "$NOTIFY_SOURCE")
 
   # build message text with here-doc for POSIX compliance
@@ -60,7 +61,7 @@ telegram_send() {
 *🏃‍♂️ Running:* ${rn}
 *⚙ Mode:* ${md}
 *📋 Message:*
->${msg}
+${msg:->}
 _🖥 Source:_ \`${src}\`
 EOF
   )
